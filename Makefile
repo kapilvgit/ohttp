@@ -21,3 +21,9 @@ build: build-server build-client build-target
 
 run-server:
 	docker compose -f ./docker/docker-compose-streaming.yml up
+
+run-client:
+	docker run --net=host ohttp-client
+
+stop-server:
+	docker compose -f ./docker/docker-compose-streaming.yml stop
