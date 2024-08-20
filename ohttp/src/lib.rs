@@ -386,11 +386,19 @@ impl ClientResponse {
 
     /// Decapsulate a response.
     pub fn decapsulate_chunk(&mut self, enc_response: &[u8]) -> (Res<Vec<u8>>, bool) {
+        // println!("Tien is here 1");
         let (len, bytes_read) = self.variant_decode(enc_response).unwrap();
         let (_, ct) = enc_response.split_at(bytes_read);
         let aad = if len == 0 { "final" } else { "" };
+        println!("Tien print aad: {}", &aad);
         self.seq += 1;
-        (self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct), len == 0)
+        (
+            self.aead
+                .as_mut()
+                .unwrap()
+                .open(aad.as_bytes(), self.seq - 1, ct),
+            len == 0,
+        )
     }
 
 }

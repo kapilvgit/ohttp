@@ -239,9 +239,14 @@ async fn main() -> Res<()> {
     loop {
         match response.chunk().await? {
             Some(chunk) => {
-                // println!("Decapsulating {}, {}", chunk.len(), hex::encode(&chunk));                
+                // println!("====================================Tien print decapsulating {}, {}", chunk.len(), hex::encode(&chunk));                
                 let (response_buf, last) = ohttp_response.decapsulate_chunk(&chunk);
+
+
+                // println!("======================================================Tien is here 1 print response_buf {:?}", &response_buf);
                 let buf = response_buf.unwrap();
+                // println!("======================================================Tien is here 2");
+
 
                 let response = Message::read_bhttp(&mut std::io::Cursor::new(&buf[..]))?;
                 if args.binary {
