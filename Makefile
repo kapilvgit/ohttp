@@ -16,7 +16,12 @@ run-client2: ca
 run-client3: ca
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
   'https://localhost:9443/score' -a ./examples/15m_gpt-has-entered-the-chat.mp3 \
-  `curl -s -k https://localhost:9443/discover
+  `curl -s -k https://localhost:9443/discover`
+
+run-client4: ca
+	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
+  'https://localhost:9443/score' -a ./examples/audio-sample-1.mp3 \
+  `curl -s -k https://localhost:9443/discover`
 
 build-server:
 	docker build -f docker/server/Dockerfile -t ohttp-server .
