@@ -84,8 +84,15 @@ async fn main() -> Res<()> {
     let boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW1";
     
     //audio
-    // let file_content = std::fs::read(&args.audio).expect("Failed to read file");
-    let file_content = std::fs::read("./examples/whatstheweatherlike.wav").expect("Failed to read file");
+    // let file_content = std::fs::read("./examples/whatstheweatherlike.wav").expect("Failed to read file");
+
+    let file_content = if let Some(infile) = &args.audio {
+        std::fs::read(infile).expect("Failed to read file")
+    } else {
+        println!("No audio file provided");
+        Vec::new() 
+    };
+
     let mut audio = Vec::new();
     write!(audio,
         "--{}\r\n\
@@ -104,6 +111,7 @@ async fn main() -> Res<()> {
     request_body.extend_from_slice(&final_boundary);
 
 
+    
     // let tmp = request_body.clone();
     // println!("Tien print request_body : {:?}", request_body);
 
@@ -119,14 +127,11 @@ async fn main() -> Res<()> {
     // let body = response.text().await?;
     // println!("Tien print Response Body111111: {}", body);
 
-
-     
     let ohttp_request = ohttp::ClientRequest::from_encoded_config_list(&args.config)?;
     let (enc_request, mut ohttp_response) = ohttp_request.encapsulate(&request_body)?;
 
 
-
-      
+    
     // //Tien start
     // // Specify the file path
     // let file_path = Path::new("./examples/whatstheweatherlike.wav");
@@ -157,6 +162,11 @@ async fn main() -> Res<()> {
     // let body = response1.text().await?;
     // println!("Tien print Response Body: {}", body);
     // //Tien end
+
+
+
+
+
 
 
 
@@ -204,7 +214,9 @@ async fn main() -> Res<()> {
         None => reqwest::ClientBuilder::new().build()?,
     };
 
-    println!("Tien print enc_request: {:?}", &enc_request);
+    // println!("Tien print enc_request: {:?}", &enc_request);
+    // println!("Tien print enc_request: {}", hex::encode(&enc_request));
+
     let mut response = client
         .post(&args.url) //Tien: https://localhost:9443/score
         .header("content-type", "message/ohttp-chunked-req") //Tien: what is the impact of ohttp-chunked-req ?

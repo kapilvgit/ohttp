@@ -17,6 +17,14 @@ use structopt::StructOpt;
 use warp::Filter;
 use warp::hyper::Body;
 
+
+use std::path::Path;
+use reqwest::multipart::{Form, Part};
+use std::{fs::File, io::{self, Read}, ops::Deref, str::FromStr};
+use std::str;
+
+
+
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Debug, StructOpt)]
@@ -55,55 +63,86 @@ impl Args {
 
 async fn generate_reply(
     ohttp_ref: &Arc<Mutex<OhttpServer>>,
-    enc_request: &[u8],
+    enc_request: &[u8],  //Tien: enc_request is comming from client, confirmed it is still being encypted
     target: Url,
     _mode: Mode,
 ) -> Res<(Response, ServerResponse)> {
+    // println!("Tien print enc_request: {}", hex::encode(&enc_request));//Same as the enc_request from the client
+
     let ohttp = ohttp_ref.lock().await;
-    let (request, server_response) = ohttp.decapsulate(enc_request)?;
-    let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
+    let (request, server_response) = ohttp.decapsulate(enc_request)?;//Tien: request is decoded!
+    // println!("Tien print request: {:?}", &request);//Tien: this should be the same as request_buf
+    // println!("Tien print server_response: {:?}", &server_response);//ServerResponse
 
-    let method: Method = if let Some(method_bytes) = bin_request.control().method() {
-        Method::from_bytes(method_bytes)?
-    } else {
-        Method::GET
-    };
 
-    let mut headers = HeaderMap::new();
-    for field in bin_request.header().fields() {
-        headers.append(
-            HeaderName::from_bytes(field.name()).unwrap(), 
-            HeaderValue::from_bytes(field.value()).unwrap());
-    }
+    // let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;//Tien: why do we need this? Because the input is converted to bhttp
+    // println!("Tien print bin_request: {:?}", &bin_request);//Tien: convert this back to text: "GET /stream HTTP/1.1\r\nuser-agent: curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3\r\nhost: www.example.com\r\naccept-language: en, mi\r\n\r\n"
+    // println!("Tien print bin_request.header: {:?}", &bin_request.header());
 
-    let mut t = target;
-    if let Some(path_bytes) = bin_request.control().path() {
-        if let Ok(path_str) = std::str::from_utf8(path_bytes) {
-            t.set_path(path_str);
-        }
-    }
+
+    // let method: Method = if let Some(method_bytes) = bin_request.control().method() {
+    //     Method::from_bytes(method_bytes)?
+    // } else {
+    //     Method::GET
+    // };
+
+    // let mut headers = HeaderMap::new();
+    // for field in bin_request.header().fields() {
+    //     headers.append(
+    //         HeaderName::from_bytes(field.name()).unwrap(), 
+    //         HeaderValue::from_bytes(field.value()).unwrap());
+    // }
+
+    // let mut t = target;
+    // if let Some(path_bytes) = bin_request.control().path() {
+    //     if let Ok(path_str) = std::str::from_utf8(path_bytes) {
+    //         t.set_path(path_str);
+    //     }
+    // }
+
+
+
+    //Tien: from the server to target it is not using the binary http, but only use http only.
+    //Tien: all the information comming from bin_request, hence comming from enc_request
+    // let client = reqwest::ClientBuilder::new().build()?;//Tien: this is to send to the target. Where is the information about target? It is from t.
+    // let response = client
+    //     .request(method, t)
+    //     .headers(headers)
+    //     .body(bin_request.content().to_vec())
+    //     .send()
+    //     .await?
+    //     .error_for_status()?;
 
     let client = reqwest::ClientBuilder::new().build()?;
     let response = client
-        .request(method, t)
-        .headers(headers)
-        .body(bin_request.content().to_vec())
+        .post("http://localhost:9000/asr?output=json")
+        .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW1")
+        .body(request)
         .send()
         .await?
-        .error_for_status()?;
+        .error_for_status()?; 
+
+    // let body = response.text().await?;
+    // println!("Tien print Response Body111111: {}", body);
 
     Ok((response, server_response))
+    // let rs: Response = reqwest::get("https://httpbin.org/get").await?;
+    // Ok((rs, server_response))
+
+    
 }
 
 
 #[allow(clippy::unused_async)]
 async fn score(
-    body: warp::hyper::body::Bytes,
-    ohttp: Arc<Mutex<OhttpServer>>,
-    target: Url,
-    mode: Mode,
+    body: warp::hyper::body::Bytes, //Tien: is this request in binary? Is it still being encrypted hy hpke?
+    ohttp: Arc<Mutex<OhttpServer>>, //Tien: contain server config, public key, private key
+    target: Url, //Tien: http://localhost:3000/
+    mode: Mode, //Tien: Knownlength
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
-    match generate_reply(&ohttp, &body[..], target, mode).await {
+
+    match generate_reply(&ohttp, &body[..], target, mode).await {//Tien: match is similar to switch in other languages.
+        
         Ok((response, mut server_response)) => {
             let response_nonce = server_response.response_nonce();
             let nonce_stream = once(async { response_nonce });
@@ -125,7 +164,11 @@ async fn score(
                     };
                     
                     if let Some(_) = err { return None };
-                    let enc_response = server_response.encapsulate_chunk(&chunked_response, last).unwrap();
+                    let enc_response = server_response.encapsulate_chunk(&chunked_response, last).unwrap();//Tien: this is to encode the reponse.
+
+                    // println!("Tien print chunked_response: {:?}", &chunked_response);// [1, 64, 200, 0, 13, 68, 97, 116, 97, 32, 99, 104, 117, 110, 107, 32, 48, 10, 0] utf-8 => "@", "D", "a", "t", "a", " ", "c", "h", "u", "n", "k", " ", "0"
+                    // println!("Tien print enc_response: {:?}", &enc_response);// 
+                    
                     Some((Ok::<Vec<u8>, ohttp::Error>(enc_response), (false, next_chunk, response, server_response, mode)))
                 }
             );

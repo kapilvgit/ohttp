@@ -3,7 +3,7 @@ import http from 'http';
 import fs from 'fs/promises';
 
 async function* generateData() {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 0; i++) {
         await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
         yield `Data chunk ${i}\n`;
     }
@@ -30,11 +30,22 @@ const returnFile = async ( res, filename, mimetype ) => {
     res.end( data );
 }
 
-const server = http.createServer(async (req, res) => {
-    console.log(req.url);
+const server = http.createServer(async (req, res) => {//Tien: where is this being called? where is req and res comming from?
+    
+
+    // console.log(req.url);
+    // console.log("Tien in print req");
+    // console.log(req);
+
+    // console.log("Tien in print res=======================================================================================");
+    // console.log(res);
+    // res.
     
     switch( req.url  ) {
         case '/stream' : 
+
+
+
             await returnStream( res )
             break;
         case '/' :
