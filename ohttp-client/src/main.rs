@@ -103,21 +103,26 @@ async fn main() -> Res<()> {
     request_body.extend_from_slice(&audio);
     request_body.extend_from_slice(&final_boundary);
 
-    let client = reqwest::ClientBuilder::new().build()?;
-    let tmp = request_body.clone();
 
+    // let tmp = request_body.clone();
     // println!("Tien print request_body : {:?}", request_body);
 
-    let response = client
-        .post("http://localhost:9000/asr?output=json")
-        .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW1")
-        .body(request_body)
-        .send()
-        .await?
-        .error_for_status()?; 
+    // let client = reqwest::ClientBuilder::new().build()?;
+    // let response = client
+    //     .post("http://localhost:9000/asr?output=json")
+    //     .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW1")
+    //     .body(request_body)
+    //     .send()
+    //     .await?
+    //     .error_for_status()?; 
     
-    let body = response.text().await?;
-    println!("Tien print Response Body111111: {}", body);
+    // let body = response.text().await?;
+    // println!("Tien print Response Body111111: {}", body);
+
+
+     
+    let ohttp_request = ohttp::ClientRequest::from_encoded_config_list(&args.config)?;
+    let (enc_request, mut ohttp_response) = ohttp_request.encapsulate(&request_body)?;
 
 
 
@@ -155,34 +160,35 @@ async fn main() -> Res<()> {
 
 
 
-    let request = if let Some(infile) = &args.input {
-        let mut r = io::BufReader::new(File::open(infile)?);
-        if args.binary {
-            Message::read_bhttp(&mut r)?
-        }         
-        else {
-            Message::read_http(&mut r)?
-        }
-    }   
-    else {
-        let mut buf = Vec::new();
-        std::io::stdin().read_to_end(&mut buf)?;
-        let mut r = io::Cursor::new(buf);
-        if args.binary {
-            Message::read_bhttp(&mut r)?
-        } else {
-            Message::read_http(&mut r)?
-        }
-    };
 
 
+    // let request = if let Some(infile) = &args.input {
+    //     let mut r = io::BufReader::new(File::open(infile)?);
+    //     if args.binary {
+    //         Message::read_bhttp(&mut r)?
+    //     }         
+    //     else {
+    //         Message::read_http(&mut r)?
+    //     }
+    // } else {
+    //     let mut buf = Vec::new();
+    //     std::io::stdin().read_to_end(&mut buf)?;
+    //     let mut r = io::Cursor::new(buf);
+    //     if args.binary {
+    //         Message::read_bhttp(&mut r)?
+    //     } else {
+    //         Message::read_http(&mut r)?
+    //     }
+    // };
 
-    let mut request_buf = Vec::new();
-    request.write_bhttp(Mode::KnownLength, &mut request_buf)?;//Tien: request_buf is binary encoded by UTF-8, why it is write_bhttp here? How the server is going to handle this?  
-    // logic in the server to handle this: let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?; 
+
+    // let mut request_buf = Vec::new();
+    // request.write_bhttp(Mode::KnownLength, &mut request_buf)?;//Tien: request_buf is binary encoded by UTF-8, why it is write_bhttp here? How the server is going to handle this?  
+    // // logic in the server to handle this: let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?; 
   
-    let ohttp_request = ohttp::ClientRequest::from_encoded_config_list(&args.config)?;
-    let (enc_request, mut ohttp_response) = ohttp_request.encapsulate(&request_buf)?;
+    // let ohttp_request = ohttp::ClientRequest::from_encoded_config_list(&args.config)?;
+    // let (enc_request, mut ohttp_response) = ohttp_request.encapsulate(&request_buf)?;
+
 
 
     let client = match &args.trust {
@@ -198,6 +204,7 @@ async fn main() -> Res<()> {
         None => reqwest::ClientBuilder::new().build()?,
     };
 
+    println!("Tien print enc_request: {:?}", &enc_request);
     let mut response = client
         .post(&args.url) //Tien: https://localhost:9443/score
         .header("content-type", "message/ohttp-chunked-req") //Tien: what is the impact of ohttp-chunked-req ?
