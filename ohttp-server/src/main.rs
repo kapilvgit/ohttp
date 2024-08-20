@@ -151,7 +151,9 @@ async fn score(
                 |(first, chunk, mut response, mut server_response, mode)| async move {
                     let chunk = if first { response.chunk().await.unwrap() } else { chunk };
                     let Some(chunk) = chunk else { return None };
+
                     println!("Processing chunk {} {}", first, std::str::from_utf8(&chunk).unwrap());
+
                     let mut bin_response = Message::response(StatusCode::OK);
                     bin_response.write_content(chunk);
                     let mut chunked_response = Vec::new();
@@ -172,13 +174,15 @@ async fn score(
                     Some((Ok::<Vec<u8>, ohttp::Error>(enc_response), (false, next_chunk, response, server_response, mode)))
                 }
             );
-        
+            
+            println!("Tien is here1=========================================================");
             let stream = nonce_stream.chain(chunk_stream);
             Ok(warp::http::Response::builder()
                 .header("Content-Type", "message/ohttp-chunked-res")
                 .body(Body::wrap_stream(stream)))
         }
         Err(e) => {
+            println!("Tien is here3=========================================================");
             println!("400 {}", e.to_string());
             if let Ok(oe) = e.downcast::<::ohttp::Error>() {
                 Ok(warp::http::Response::builder()

@@ -10,29 +10,13 @@ run-client: ca
 
 run-client2: ca
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' -i ./examples/request2.txt \
+  'https://localhost:9443/score' -a ./examples/whatstheweatherlike.wav \
   `curl -s -k https://localhost:9443/discover`
 
 run-client3: ca
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' -i ./examples/request3.txt \
-  `curl -s -k https://localhost:9443/discover`
-
-run-client4: ca
-	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' -i ./examples/request4.txt \
-  `curl -s -k https://localhost:9443/discover`
-
-
-run-client5: ca
-	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' -i ./examples/request5.txt \
-  `curl -s -k https://localhost:9443/discover`
-
-run-client6: ca
-	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' -a ./examples/whatstheweatherlike.wav \
-  `curl -s -k https://localhost:9443/discover`
+  'https://localhost:9443/score' -a ./examples/15m_gpt-has-entered-the-chat.mp3 \
+  `curl -s -k https://localhost:9443/discover
 
 build-server:
 	docker build -f docker/server/Dockerfile -t ohttp-server .
@@ -55,6 +39,8 @@ stop-server:
 kill-server:
 	docker compose -f ./docker/docker-compose-streaming.yml kill
 
+# run-whisper:
+#     docker run -d --gpus all -p 9000:9000 -e ASR_MODEL=base -e ASR_ENGINE=openai_whisper onerahmet/openai-whisper-asr-webservice:latest
 
 # run-client10:
 # 	docker run --net=host ohttp-client
