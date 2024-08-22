@@ -31,6 +31,8 @@ use serde_json::from_str;
 use serde::Deserialize;
 use hpke::Deserializable;
 
+const CHUNK_SIZE: usize = 16000;
+
 #[derive(Deserialize)]
 struct ExportedKey {
     kid: u8,
@@ -142,7 +144,6 @@ async fn score(
 
             let chunk_stream = unfold((true, None, response, server_response, mode), 
                 |(first, mut chunk, mut response, mut server_response, mode)| async move {
-                    let chunk_size = 16000;//about 16 MB
 
                     if first {chunk = response.chunk().await.unwrap();}
                     let Some(mut chunk) = chunk else { return None };
@@ -151,7 +152,7 @@ async fn score(
                 
                     while !chunk.is_empty() {
                         // Determine the size of the next chunk part
-                        let size = std::cmp::min(chunk_size, chunk.len());
+                        let size = std::cmp::min(CHUNK_SIZE, chunk.len());
                         // Split the chunk into a part to process and the remainder
                         let (chunk_part, remaining_chunk) = chunk.split_at(size);
 
