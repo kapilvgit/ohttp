@@ -150,18 +150,12 @@ async fn score(
             
             let chunk_stream = unfold((true, None, response, server_response, mode), 
                 |(first, mut chunk, mut response, mut server_response, mode)| async move {
-                    let chunk_size = 16000;//8 KB
+                    let chunk_size = 16000;//about 16 MB
 
-                    if first {
-                        chunk = response.chunk().await.unwrap();
-                    }
+                    if first {chunk = response.chunk().await.unwrap();}
                     let Some(mut chunk) = chunk else { return None };
 
-                    println!(
-                        "Processing chunk {} {}",
-                        first,
-                        std::str::from_utf8(&chunk).unwrap()
-                    );
+                    println!("Processing chunk {} {}",first,std::str::from_utf8(&chunk).unwrap());
                 
                     while !chunk.is_empty() {
                         // Determine the size of the next chunk part
@@ -193,7 +187,7 @@ async fn score(
 
                         let enc_response = server_response.encapsulate_chunk(&chunked_response, last).unwrap();
                         return Some((Ok::<Vec<u8>, ohttp::Error>(enc_response), (false, Some(chunk), response, server_response, mode)));
-                }
+                    }
                 None
             }
             );
