@@ -239,11 +239,15 @@ async fn main() -> Res<()> {
     loop {
         match response.chunk().await? {
             Some(chunk) => {
-                // println!("====================================Tien print decapsulating {}, {}", chunk.len(), hex::encode(&chunk));                
+                // println!("====================================Tien print decapsulating {}, {}", chunk.len(), hex::encode(&chunk));  
+                // println!("======Tien print chunk :{:?}", &chunk);
+
                 let (response_buf, last) = ohttp_response.decapsulate_chunk(&chunk);
+                // println!("======Tien print response_buf :{:?}", &response_buf);
 
 
-                // println!("======================================================Tien is here 1 print response_buf {:?}", &response_buf);
+                // println!("======================================================Tien is here 1 print response_buf: {:?}", &response_buf);//Err(Aead(Error))
+                // println!("============Tien print last: {}", &last);//true
                 let buf = response_buf.unwrap();
                 // println!("======================================================Tien is here 2");
 
@@ -254,6 +258,7 @@ async fn main() -> Res<()> {
                 } else {
                     response.write_http(&mut output)?;
                 }
+
                 if last { break; }
             }
             None => {

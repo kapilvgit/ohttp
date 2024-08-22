@@ -20,6 +20,7 @@ pub enum Mode {
     Decrypt,
 }
 
+// #[derive(Debug)]
 enum AeadEngine {
     Aes128Gcm(Box<Aes128Gcm>),
     Aes256Gcm(Box<Aes256Gcm>),
@@ -52,6 +53,7 @@ impl AeadEngine {
 }
 
 /// A switch-hitting AEAD that uses a selected primitive.
+// #[derive(Debug)]
 pub struct Aead {
     mode: Mode,
     engine: AeadEngine,

@@ -246,6 +246,7 @@ fn make_aead(
 pub struct ServerResponse {
     response_nonce: Vec<u8>,
     aead: Aead,
+    count: u64,
 }
 
 #[cfg(feature = "server")]
@@ -253,9 +254,11 @@ impl ServerResponse {
     fn new(hpke: &HpkeR, enc: Vec<u8>) -> Res<Self> {
         let response_nonce = random(entropy(hpke.config()));
         let aead = make_aead(Mode::Encrypt, hpke.config(), hpke, enc, &response_nonce)?;
+        let count = 0;
         Ok(Self {
             response_nonce,
             aead,
+            count,
         })
     }
 
@@ -273,7 +276,7 @@ impl ServerResponse {
                 break;
             }
         }
-        bytes.reverse(); // The most significant chunk should come first
+        // bytes.reverse(); // The most significant chunk should come first
         bytes
     }
 
@@ -292,13 +295,29 @@ impl ServerResponse {
     /// Encapsulating a chunk in the response.
     pub fn encapsulate_chunk(&mut self, chunk: &[u8], last: bool) -> Res<Vec<u8>> {
         let mut enc_response = Vec::new();
-        let aad = if last { "final" } else { "" };
+        let aad = if last { "final" } else { "more" };
         let mut ct = self.aead.seal(aad.as_bytes(), chunk)?;
         let mut enc_length = self.variant_encode(if last { 0 } else { ct.len() });
+        
+        // println!("Tien print ct.len() : {:?}", &ct.len());
+        // println!("Tien print enc_length : {:?}", &enc_length);
+        
+        // println!("Tien print ct: {:?}", &ct);
+        // println!("Tien print ct: {}", hex::encode(&ct));
+        
+        // if self.count < 2 {
+            // println!("Tien print ct: {:?}", &ct);
+        // }
+
         enc_response.append(&mut enc_length);
         enc_response.append(&mut ct);
+        self.count += 1;
+        // println!("Tien print enc_response456: {:?}", &enc_response);
+        // println!("Tien print enc_response456: {}", hex::encode(&enc_response));
         Ok(enc_response)
     }
+
+    // .open(aad.as_bytes(), self.seq - 1, ct),
 
 }
 
@@ -363,6 +382,7 @@ impl ClientResponse {
         Ok(())
     }
 
+
     fn variant_decode(&mut self, bytes: &[u8]) -> Result<(u64, usize), String> {
         let mut value: u64 = 0;
         let mut shift = 0;
@@ -373,7 +393,6 @@ impl ClientResponse {
             value |= byte_value << shift;
             bytes_read += 1;
             if byte & 0x80 == 0 {
-                // Continuation bit is not set, end of the VLQ-encoded integer
                 return Ok((value, bytes_read));
             }
             shift += 7;
@@ -384,21 +403,36 @@ impl ClientResponse {
         Err("Incomplete VLQ-encoded integer".to_string())
     }
 
+
     /// Decapsulate a response.
     pub fn decapsulate_chunk(&mut self, enc_response: &[u8]) -> (Res<Vec<u8>>, bool) {
+        // println!("************Tien print enc_response: {}", hex::encode(&enc_response));
+        // println!("************Tien print enc_response: {:?}", &enc_response);
         // println!("Tien is here 1");
-        let (len, bytes_read) = self.variant_decode(enc_response).unwrap();
-        let (_, ct) = enc_response.split_at(bytes_read);
-        let aad = if len == 0 { "final" } else { "" };
-        println!("Tien print aad: {}", &aad);
+        let (len, bytes_read) = self.variant_decode(&enc_response).unwrap();
+        // println!("=======Tien print len {}", &len);
+
+        let (_, ct) = enc_response.split_at(bytes_read);//Tien: is this correct?
+
+        // println!("Tien print bytes_read: {:?}", &bytes_read);
+        // println!("************Tien print enc_response: {:?}", &enc_response);
+        // println!("************Tien print ct: {:?}", &ct);
+
+        // println!("************Tien print enc_response: {}", hex::encode(&enc_response));
+        // println!("************Tien print ct: {}", hex::encode(&ct));
+
+        let aad = if len == 0 { "final" } else { "more" };
         self.seq += 1;
         (
             self.aead
                 .as_mut()
                 .unwrap()
-                .open(aad.as_bytes(), self.seq - 1, ct),
+                .open(aad.as_bytes(), self.seq - 1, &ct),
             len == 0,
         )
+
+        // let ok_result: Result<Vec<u8>, Error> = Ok(Vec::new());
+        // (ok_result, len==0)
     }
 
 }

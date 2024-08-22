@@ -3,7 +3,7 @@ TARGET ?= http://127.0.0.1:3000
 ca:
 	./ohttp-server/ca.sh
 
-run-client: ca
+run-client1: ca
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
   'https://localhost:9443/score' -i ./examples/request.txt \
   `curl -s -k https://localhost:9443/discover`
@@ -20,10 +20,10 @@ run-client3: ca
 
 run-client4: ca
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' -a ./examples/audio-sample-1.mp3 \
+  'https://localhost:9443/score' -a ./examples/audio-sample-2.mp3 \
   `curl -s -k https://localhost:9443/discover`
 
-build-server:
+bs:
 	docker build -f docker/server/Dockerfile -t ohttp-server .
 
 build-client:
@@ -34,14 +34,14 @@ build-target:
 
 build: build-server build-client build-target
 
-run-server:
+rs:
 	docker compose -f ./docker/docker-compose-streaming.yml up
 
 
 stop-server:
 	docker compose -f ./docker/docker-compose-streaming.yml stop
 
-kill-server:
+ks:
 	docker compose -f ./docker/docker-compose-streaming.yml kill
 
 # run-whisper:

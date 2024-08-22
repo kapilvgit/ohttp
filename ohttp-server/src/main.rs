@@ -140,39 +140,62 @@ async fn score(
     target: Url, //Tien: http://localhost:3000/
     mode: Mode, //Tien: Knownlength
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
+    // let mut count = 0;
 
     match generate_reply(&ohttp, &body[..], target, mode).await {//Tien: match is similar to switch in other languages.
         
-        Ok((response, mut server_response)) => {
+        Ok((response, mut server_response)) => {//Tien: how to break this into small reponses?
             let response_nonce = server_response.response_nonce();
             let nonce_stream = once(async { response_nonce });
             
             let chunk_stream = unfold((true, None, response, server_response, mode), 
-                |(first, chunk, mut response, mut server_response, mode)| async move {
-                    let chunk = if first { response.chunk().await.unwrap() } else { chunk };
-                    let Some(chunk) = chunk else { return None };
+                |(first, mut chunk, mut response, mut server_response, mode)| async move {
+                    let chunk_size = 16000;//8 KB
 
-                    // println!("Tien print processing chunk {} {}", first, std::str::from_utf8(&chunk).unwrap());
+                    if first {
+                        chunk = response.chunk().await.unwrap();
+                    }
+                    let Some(mut chunk) = chunk else { return None };
 
-                    let mut bin_response = Message::response(StatusCode::OK);
-                    bin_response.write_content(chunk);
-                    let mut chunked_response = Vec::new();
-                    bin_response.write_bhttp(mode, &mut chunked_response).unwrap();
+                    println!(
+                        "Processing chunk {} {}",
+                        first,
+                        std::str::from_utf8(&chunk).unwrap()
+                    );
+                
+                    while !chunk.is_empty() {
+                        // Determine the size of the next chunk part
+                        let size = std::cmp::min(chunk_size, chunk.len());
+                        // Split the chunk into a part to process and the remainder
+                        let (chunk_part, remaining_chunk) = chunk.split_at(size);
 
-                    let (next_chunk, last, err) = match response.chunk().await {
-                        Ok(Some(c)) => (Some(c), false, None),
-                        Ok(None) => (None, true, None),
-                        Err(_) => (None, true, Some(ohttp::Error::Truncated))
-                    };
-                    
-                    if let Some(_) = err { return None };
-                    let enc_response = server_response.encapsulate_chunk(&chunked_response, last).unwrap();//Tien: this is to encode the reponse.
+                        let mut bin_response = Message::response(StatusCode::OK);
+                        bin_response.write_content(chunk_part);
+                        let mut chunked_response = Vec::new();
+                        bin_response.write_bhttp(mode, &mut chunked_response).unwrap();
 
-                    // println!("Tien print chunked_response: {:?}", &chunked_response);// [1, 64, 200, 0, 13, 68, 97, 116, 97, 32, 99, 104, 117, 110, 107, 32, 48, 10, 0] utf-8 => "@", "D", "a", "t", "a", " ", "c", "h", "u", "n", "k", " ", "0"
-                    // println!("Tien print enc_response: {:?}", &enc_response);// 
-                    
-                    Some((Ok::<Vec<u8>, ohttp::Error>(enc_response), (false, next_chunk, response, server_response, mode)))
+                        let (next_chunk, last_major, err) = match response.chunk().await {
+                            Ok(Some(c)) => (Some(c), false, None),
+                            Ok(None) => (None, true, None),
+                            Err(_) => (None, true, Some(ohttp::Error::Truncated))
+                        };
+
+                        if let Some(_) = err { return None };
+                        let mut last = false;
+
+                        // If there's remaining data, continue with it; otherwise, proceed to the next chunk
+                        if !remaining_chunk.is_empty() {
+                            chunk = remaining_chunk.to_vec().into();
+                        } else {
+                            chunk = next_chunk.unwrap_or_default();
+                            if last_major {last = true;}
+                        }
+
+                        let enc_response = server_response.encapsulate_chunk(&chunked_response, last).unwrap();
+                        return Some((Ok::<Vec<u8>, ohttp::Error>(enc_response), (false, Some(chunk), response, server_response, mode)));
                 }
+                None
+            }
             );
             
             // println!("Tien is here1=========================================================");
