@@ -198,7 +198,7 @@ async fn score(
 async fn discover(config: String, token: String) -> Result<impl warp::Reply, std::convert::Infallible> {
     Ok(warp::http::Response::builder()
         .status(200)
-        .body(Vec::from(token)))
+        .body(Vec::from(config)))
 }
 
 fn with_ohttp(
