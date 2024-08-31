@@ -1,6 +1,7 @@
 KMS ?= https://acceu-aml-504.confidential-ledger.azure.com
 TARGET ?= http://127.0.0.1:3000
-TARGET_PATH ?= '/v1/audio/transcriptions'
+# TARGET_PATH ?= '/v1/audio/transcriptions'
+TARGET_PATH ?= '/whisper'
 INPUT ?= ./examples/audio.mp3
 
 ca:
