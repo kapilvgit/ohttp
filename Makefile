@@ -25,6 +25,9 @@ run-server: ca
 	cargo run --bin ohttp-server -- --certificate ./ohttp-server/server.crt \
 		--key ./ohttp-server/server.key --target ${TARGET}
 
+run-server-container: 
+	docker run --privileged -e TARGET=${TARGET}  --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+
 run-whisper:
 	docker run --network=host whisper-api 
 
