@@ -34,8 +34,6 @@ use serde::Deserialize;
 use hpke::Deserializable;
 
 const CHUNK_SIZE: usize = 16000;
-// const MAA_ENDPOINT_URL: &str = "https://sharedeus2.eus2.attest.azure.net/";
-const MAA_ENDPOINT_URL: &str = "https://maanosecureboottestyfu.eus.attest.azure.net/";
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -66,6 +64,10 @@ struct Args {
     /// Target server
     #[structopt(long, short = "t", default_value = "http://127.0.0.1:8000")]
     target: Url,
+
+    /// MAA endpoint
+    #[structopt(long, short = "m", default_value = "https://sharedeus2.eus2.attest.azure.net")]
+    maa: Url,
 }
 
 impl Args {
@@ -214,9 +216,10 @@ async fn main() -> Res<()> {
     let args = Args::from_args();
     ::ohttp::init();
     env_logger::try_init().unwrap();
+    let maa = args.maa.clone();
 
     // Get MAA token from CVM guest attestation library
-    let Some(tok) = attest("{}".as_bytes(), 0xffff, MAA_ENDPOINT_URL) else {panic!("Failed to get MAA token. You must be root to access TPM.")};
+    let Some(tok) = attest("{}".as_bytes(), 0xffff, maa.as_str()) else {panic!("Failed to get MAA token. You must be root to access TPM.")};
     let token = String::from_utf8(tok).unwrap();
     println!("Fetched MAA token: {}", token);
 
