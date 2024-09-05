@@ -26,7 +26,7 @@ run-server: ca
 		--key ./ohttp-server/server.key --target ${TARGET}
 
 run-server-container: 
-	docker run --privileged -e TARGET=${TARGET}  --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+	docker run --privileged -e TARGET=${TARGET}  --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
 
 run-whisper:
 	docker run --network=host whisper-api 
