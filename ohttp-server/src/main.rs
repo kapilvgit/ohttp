@@ -46,7 +46,8 @@ struct ExportedKey {
 #[structopt(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
 struct Args {
     /// The address to bind to.
-    #[structopt(default_value = "127.0.0.1:9443")]
+    // #[structopt(default_value = "127.0.0.1:9443")]
+    #[structopt(default_value = "0.0.0.0:9443")]
     address: SocketAddr,
 
     /// When creating message/bhttp, use the indeterminate-length form.
