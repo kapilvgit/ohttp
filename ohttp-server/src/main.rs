@@ -141,7 +141,7 @@ async fn score(
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     match generate_reply(&ohttp, &body[..], target, mode).await {
-        Ok((response, mut server_response)) => {
+        Ok((response, server_response)) => {
             let stream = unfold (
                 response, |mut r| async move { 
                     let Some(chunk) = r.chunk().await.unwrap() else { return None };
@@ -149,11 +149,10 @@ async fn score(
                 }
             );
 
-            let encapsulated_stream = 
-                server_response.encapsulate_stream(stream).await;
+            let stream = server_response.encapsulate_stream(stream);
             Ok(warp::http::Response::builder()
                 .header("Content-Type", "message/ohttp-chunked-res")
-                .body(Body::wrap_stream(encapsulated_stream)))
+                .body(Body::wrap_stream(stream)))
         }
         Err(e) => {
             println!("400 {}", e.to_string());

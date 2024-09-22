@@ -337,10 +337,11 @@ impl ServerResponse {
         Ok(enc_response)
     }
 
-    pub async fn encapsulate_stream<S, E>(&mut self, input: S) -> 
-        std::pin::Pin<Box<dyn Stream<Item = Res<Vec<u8>>> + Send>>
+    // Consume this object by encapsulating a stream
+    pub fn encapsulate_stream<S, E>(mut self, input: S) -> 
+        std::pin::Pin<Box<dyn Stream<Item = Res<Vec<u8>>> + Send + 'static>>
     where
-        S: Stream<Item = Result<Vec<u8>, E>> + Send,
+        S: Stream<Item = Result<Vec<u8>, E>> + Send + 'static,
         E: std::fmt::Debug + Send
     {
         let response_nonce = self.response_nonce();
@@ -362,7 +363,7 @@ impl ServerResponse {
             stream::iter(encapsulated_chunks)
         });
         let stream = nonce_stream.chain(output_stream);
-        Box::pin(stream::iter(stream.collect::<Vec<_>>().await))
+        Box::pin(stream)
     }
 }
 
