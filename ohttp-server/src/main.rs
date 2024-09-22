@@ -2,15 +2,14 @@
 
 use std::{io::Cursor, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use futures::StreamExt;
-use futures_util::stream::{once, unfold};
+use futures_util::stream::unfold;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Method, Response, Url,
 };
 use tokio::sync::Mutex;
 
-use bhttp::{Message, Mode, StatusCode};
+use bhttp::{Message, Mode};
 use ohttp::{
     hpke::{Aead, Kdf, Kem},
     KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
@@ -143,73 +142,18 @@ async fn score(
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     match generate_reply(&ohttp, &body[..], target, mode).await {
         Ok((response, mut server_response)) => {
-            let response_nonce = server_response.response_nonce();
-            let nonce_stream = once(async { response_nonce });
-
-            let chunk_stream = unfold(
-                (true, None, response, server_response, mode),
-                |(first, mut chunk, mut response, mut server_response, mode)| async move {
-                    if first {
-                        chunk = response.chunk().await.unwrap();
-                    }
-                    let Some(mut chunk) = chunk else { return None };
-
-                    println!(
-                        "Processing chunk {} {}",
-                        first,
-                        std::str::from_utf8(&chunk).unwrap()
-                    );
-
-                    while !chunk.is_empty() {
-                        // Determine the size of the next chunk part
-                        let size = std::cmp::min(CHUNK_SIZE, chunk.len());
-                        // Split the chunk into a part to process and the remainder
-                        let (chunk_part, remaining_chunk) = chunk.split_at(size);
-
-                        let mut bin_response = Message::response(StatusCode::OK);
-                        bin_response.write_content(chunk_part);
-                        let mut chunked_response = Vec::new();
-                        bin_response
-                            .write_bhttp(mode, &mut chunked_response)
-                            .unwrap();
-
-                        let (next_chunk, last_major, err) = match response.chunk().await {
-                            Ok(Some(c)) => (Some(c), false, None),
-                            Ok(None) => (None, true, None),
-                            Err(_) => (None, true, Some(ohttp::Error::Truncated)),
-                        };
-
-                        if let Some(_) = err {
-                            return None;
-                        };
-                        let mut last = false;
-
-                        // If there's remaining data, continue with it; otherwise, proceed to the next chunk
-                        if !remaining_chunk.is_empty() {
-                            chunk = remaining_chunk.to_vec().into();
-                        } else {
-                            chunk = next_chunk.unwrap_or_default();
-                            if last_major {
-                                last = true;
-                            }
-                        }
-
-                        let enc_response = server_response
-                            .encapsulate_chunk(&chunked_response, last)
-                            .unwrap();
-                        return Some((
-                            Ok::<Vec<u8>, ohttp::Error>(enc_response),
-                            (false, Some(chunk), response, server_response, mode),
-                        ));
-                    }
-                    None
-                },
+            let stream = unfold (
+                response, |mut r| async move { 
+                    let Some(chunk) = r.chunk().await.unwrap() else { return None };
+                    Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), r))
+                }
             );
 
-            let stream = nonce_stream.chain(chunk_stream);
+            let encapsulated_stream = 
+                server_response.encapsulate_stream(stream).await;
             Ok(warp::http::Response::builder()
                 .header("Content-Type", "message/ohttp-chunked-res")
-                .body(Body::wrap_stream(stream)))
+                .body(Body::wrap_stream(encapsulated_stream)))
         }
         Err(e) => {
             println!("400 {}", e.to_string());

@@ -15,6 +15,10 @@ mod rand;
 #[cfg(feature = "rust-hpke")]
 mod rh;
 
+use futures::{stream::Stream, StreamExt};
+use futures::stream::{self};
+use futures_util::stream::once;
+
 pub use crate::{
     config::{KeyConfig, SymmetricSuite},
     err::Error,
@@ -331,6 +335,34 @@ impl ServerResponse {
         enc_response.append(&mut enc_length);
         enc_response.append(&mut ct);
         Ok(enc_response)
+    }
+
+    pub async fn encapsulate_stream<S, E>(&mut self, input: S) -> 
+        std::pin::Pin<Box<dyn Stream<Item = Res<Vec<u8>>> + Send>>
+    where
+        S: Stream<Item = Result<Vec<u8>, E>> + Send,
+        E: std::fmt::Debug + Send
+    {
+        let response_nonce = self.response_nonce();
+        let nonce_stream = once(async { response_nonce });
+        let output_stream = input.flat_map(move |item| {
+            let chunk = item.expect("Invalid chunk");
+            println!("Processing chunk {}", std::str::from_utf8(&chunk).unwrap());
+            let chunks = chunk.chunks(16000);
+            let mut encapsulated_chunks: Vec<Res<Vec<u8>>> = Vec::new();
+            for part in chunks {
+                let mut enc_response = Vec::new();
+                let aad = "";
+                let mut ct = self.aead.seal(aad.as_bytes(), part).unwrap();
+                let mut enc_length = self.variant_encode(ct.len());
+                enc_response.append(&mut enc_length);
+                enc_response.append(&mut ct);
+                encapsulated_chunks.push(Ok(enc_response));
+            }
+            stream::iter(encapsulated_chunks)
+        });
+        let stream = nonce_stream.chain(output_stream);
+        Box::pin(stream::iter(stream.collect::<Vec<_>>().await))
     }
 }
 
