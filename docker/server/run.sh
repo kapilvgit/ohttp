@@ -23,4 +23,5 @@ if [[ ${KMS_URL} ]]; then
 fi
 
 # Run OHTTP server
-`$CMD`
+echo "Running $CMD..."
+eval $CMD

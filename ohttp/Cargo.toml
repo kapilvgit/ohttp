@@ -45,6 +45,7 @@ thiserror = "1"
 futures-util = "0.3.30"
 futures = "0.3.30"
 bytes = "1.7.2"
+async-stream = "0.3.5"
 
 [dependencies.hpke-pq]
 package = "hpke_pq"

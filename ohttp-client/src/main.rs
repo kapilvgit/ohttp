@@ -7,6 +7,8 @@ use std::{
 use std::io::Cursor;
 use structopt::StructOpt;
 use reqwest::Client;
+use futures_util::stream::unfold;
+use futures_util::StreamExt;
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -207,7 +209,7 @@ async fn main() -> Res<()> {
     };
 
     println!("\n================== STEP 2 ==================");
-    let (enc_request, mut ohttp_response) = ohttp_request.encapsulate(&request_buf)?;
+    let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
     println!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
 
     let client = match &args.trust {
@@ -231,7 +233,7 @@ async fn main() -> Res<()> {
         builder = builder.header("api-key", key)
     }
     
-    let mut response = builder
+    let response = builder
         .body(enc_request)
         .send()
         .await?
@@ -243,30 +245,21 @@ async fn main() -> Res<()> {
         Box::new(std::io::stdout())
     };
 
-    let response_nonce = response.chunk().await?.unwrap();
-    ohttp_response.set_response_nonce(&response_nonce)?;
+    let stream = Box::pin(unfold (
+        response, |mut response| async move { 
+            let Some(chunk) = response.chunk().await.unwrap() else { return None };
+            Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response))
+        }
+    ));
 
-    loop {
-        match response.chunk().await? {
-            Some(chunk) => {
-                println!("Decrypting OHTTP chunk: {}\n", hex::encode(&chunk[0..60]));
-                let (response_buf, last) = 
-                    ohttp_response.decapsulate_chunk(&chunk);
-
-                let buf = response_buf.unwrap();
-                let response = Message::read_bhttp(&mut std::io::Cursor::new(&buf[..]))?;
-                if args.binary {
-                    response.write_bhttp(args.mode(), &mut output)?;
-                } else {
-                    output.write_all(response.content())?;
-                }
-
-                if last {
-                    break;
-                }
+    let mut stream = client_response.decapsulate_stream(stream).await;
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(chunk) => {
+                output.write_all(&chunk)?;
             }
-            None => {
-                break;
+            Err(e) => {
+                println!("Error in stream {}", e)
             }
         }
     }
