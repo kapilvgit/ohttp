@@ -32,7 +32,7 @@ use serde_json::from_str;
 use hpke::Deserializable;
 use serde::Deserialize;
 
-const CHUNK_SIZE: usize = 16000;
+use log::{info, trace, error};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -78,6 +78,10 @@ struct Args {
     /// KMS endpoint
     #[structopt(long, short = "s")]
     kms_url: Option<String>,
+
+    /// Enable tracing
+    #[structopt(long)]
+    trace: bool,
 }
 
 impl Args {
@@ -142,20 +146,20 @@ async fn score(
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     match generate_reply(&ohttp, &body[..], target, mode).await {
         Ok((response, server_response)) => {
-            let stream = unfold (
-                response, |mut r| async move { 
-                    let Some(chunk) = r.chunk().await.unwrap() else { return None };
-                    Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), r))
+            let stream = Box::pin(unfold(response, |mut response| async move {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response)),
+                    _ => None,
                 }
-            );
-
+            }));
+        
             let stream = server_response.encapsulate_stream(stream);
             Ok(warp::http::Response::builder()
                 .header("Content-Type", "message/ohttp-chunked-res")
                 .body(Body::wrap_stream(stream)))
         }
         Err(e) => {
-            println!("400 {}", e.to_string());
+            error!("400 {}", e.to_string());
             if let Ok(oe) = e.downcast::<::ohttp::Error>() {
                 Ok(warp::http::Response::builder()
                     .status(422)
@@ -190,7 +194,7 @@ async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
         panic!("Failed to get MAA token. You must be root to access TPM.")
     };
     let token = String::from_utf8(tok).unwrap();
-    println!("Fetched MAA token: {}", token);
+    info!("Fetched MAA token: {}", token);
 
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
@@ -214,7 +218,7 @@ async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
         if response.status() == 202 {
             if retries < max_retries {
                 retries += 1;
-                println!(
+                trace!(
                     "Received 202 status code, retrying... (attempt {}/{})",
                     retries, max_retries
                 );
@@ -227,7 +231,7 @@ async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
             let skr: ExportedKey =
                 from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
 
-            println!(
+            info!(
                 "SKR successful, KID={}, Receipt={}, Key={}",
                 skr.kid, skr.receipt, skr.key
             );
@@ -328,7 +332,7 @@ async fn main() -> Res<()> {
 
     let ohttp = OhttpServer::new(config)?;
     let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()])?);
-    println!("Config: {}", config);
+    info!("Config: {}", config);
 
     let mode = args.mode();
     let target = args.target;

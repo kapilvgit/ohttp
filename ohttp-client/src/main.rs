@@ -30,6 +30,8 @@ impl Deref for HexArg {
     }
 }
 
+use log::info;
+
 #[derive(Debug, StructOpt)]
 #[structopt(name = "ohttp-client", about = "Make an oblivious HTTP request.")]
 struct Args {
@@ -68,26 +70,12 @@ struct Args {
     #[structopt(long, short = "b")]
     binary: bool,
 
-    /// When creating message/bhttp, use the indeterminate-length form.
-    #[structopt(long, short = "n", alias = "indefinite")]
-    indeterminate: bool,
-
     /// Enable override for the trust store.
     #[structopt(long)]
     trust: Option<PathBuf>,
 
     #[structopt(long, short = "a")]
     api_key: Option<String>
-}
-
-impl Args {
-    fn mode(&self) -> Mode {
-        if self.indeterminate {
-            Mode::IndeterminateLength
-        } else {
-            Mode::KnownLength
-        }
-    }
 }
 
 // Create a multi-part request from a file
@@ -174,7 +162,7 @@ async fn main() -> Res<()> {
     ::ohttp::init();
     env_logger::try_init().unwrap();
 
-    println!("\n================== STEP 1 ==================");
+    info!("================== STEP 1 ==================");
 
     let request = if let Some(infile) = &args.input {
         let request = create_multipart_request(&args.target_path, infile)?;
@@ -208,9 +196,9 @@ async fn main() -> Res<()> {
         ohttp::ClientRequest::from_encoded_config_list(config)?
     };
 
-    println!("\n================== STEP 2 ==================");
+    info!("================== STEP 2 ==================");
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    println!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
+    info!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
 
     let client = match &args.trust {
         Some(pem) => {
@@ -245,12 +233,12 @@ async fn main() -> Res<()> {
         Box::new(std::io::stdout())
     };
 
-    let stream = Box::pin(unfold (
-        response, |mut response| async move { 
-            let Some(chunk) = response.chunk().await.unwrap() else { return None };
-            Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response))
+    let stream = Box::pin(unfold(response, |mut response| async move {
+        match response.chunk().await {
+            Ok(Some(chunk)) => Some((Ok(chunk.to_vec()), response)),
+            _ => None,
         }
-    ));
+    }));
 
     let mut stream = client_response.decapsulate_stream(stream).await;
     while let Some(result) = stream.next().await {

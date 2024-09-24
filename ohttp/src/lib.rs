@@ -15,9 +15,9 @@ mod rand;
 #[cfg(feature = "rust-hpke")]
 mod rh;
 
+use async_stream::stream;
 use futures::{stream::Stream, StreamExt};
 use futures_util::stream::once;
-use async_stream::stream;
 
 pub use crate::{
     config::{KeyConfig, SymmetricSuite},
@@ -29,8 +29,7 @@ use crate::{
     hpke::{Aead as AeadId, Kdf, Kem},
 };
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use log::trace;
-use std::marker;
+use log::{info, trace};
 use std::{
     cmp::max,
     convert::TryFrom,
@@ -145,14 +144,14 @@ impl ClientRequest {
     pub fn from_kms_config(config: &str, cert: &str) -> Res<Self> {
         let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config).unwrap();
         if let Some(kms_config) = kms_configs.pop() {
-            println!(
+            info!(
                 "{}",
                 "Establishing trust in key management service...".red()
             );
 
             let _ = verifier::verify(&kms_config.receipt, &cert)?;
 
-            println!(
+            info!(
                 "{}",
                 "The receipt for the generation of the OHTTP key is valid.".green()
             );
@@ -160,7 +159,7 @@ impl ClientRequest {
             let encoded_key = hex::decode(&kms_config.key_config).unwrap();
             let mut config = KeyConfig::decode(&encoded_key)?;
 
-            println!(
+            info!(
                 "\n{} {}\n",
                 "Loaded OHTTP public key configuration: ".green(),
                 &kms_config.key_config
@@ -296,6 +295,9 @@ pub struct ServerResponse {
     aead: Aead,
 }
 
+// Max size of a chunk
+const CHUNK_SIZE: usize = 16000;
+
 #[cfg(feature = "server")]
 impl ServerResponse {
     fn new(hpke: &HpkeR, enc: Vec<u8>) -> Res<Self> {
@@ -353,7 +355,6 @@ impl ServerResponse {
     //   Length (i) = 1..,
     //   AEAD-Protected Chunk (..),
     // }
-
     pub fn encapsulate_stream<S, E>(
         mut self,
         input: S,
@@ -366,94 +367,52 @@ impl ServerResponse {
         let response_nonce = self.response_nonce();
         let nonce_stream = once(async { response_nonce });
 
-        let mut input = Box::pin(input);
+        let input = Box::pin(input);
+
+        // Split chunks into CHUNK_SIZE elements
+        let mut chunked_stream = input.flat_map(|item| {
+            let chunk = item.unwrap();
+            let chunks: Vec<Vec<u8>> = chunk.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+            futures_util::stream::iter(chunks)
+        });
+
         let output_stream = stream! {
-            let current = input.next().await;
-            let Some(current) = current else { return };
-
-            // TODO: Need to handle error here
-            let Ok(mut current) = current else { return };
-            
+            let current = chunked_stream.next().await;
+            let Some(mut current) = current else { return };
             loop {
-                println!("Processing chunk {}", std::str::from_utf8(&current).unwrap());
-
-                // Get the next chunk
-                let next = input.next().await;
-                match next {
-                    Some(Ok(next)) => {
-                        // There is a next chunk, so the current is not last
-                        let aad = "";
-                        let chunks = current.chunks(16000);
-                        for part in chunks {
-                            let mut enc_response = Vec::new();
-                            let mut ct = self.aead.seal(aad.as_bytes(), part).unwrap();
-                            let mut enc_length = self.variant_encode(ct.len());
-                            enc_response.append(&mut enc_length);
-                            enc_response.append(&mut ct);
-                            println!("Encapsulated chunk {}", hex::encode(&enc_response));
-                            yield Ok(enc_response);
-                        }
-                        current = next;
-                    },
-                    Some(Err(_)) => {
-                        yield Err(Error::Truncated)
-                    },
-                    None => {
-                        // No next chunk, current is last 
-                        let aad = "final";
-
-                        // Add the final chunk indicator
-                        let final_chunk_indicator = self.variant_encode(0);
-                        yield Ok(final_chunk_indicator);
-
-                        // Add the final chunk
-                        let mut enc_response = Vec::new();
-                        let mut ct = self.aead.seal(aad.as_bytes(), &current).unwrap();
-                        let mut enc_length = self.variant_encode(ct.len());
-                        enc_response.append(&mut enc_length);
-                        enc_response.append(&mut ct);
-
-                        println!("Encapsulated final chunk {}", hex::encode(&enc_response));
-                        yield Ok(enc_response);
-                        return;
-                    }
-                }
-            }
-        };
-    
-        // Chunked Response Chunks
-        /*
-        let marker = once(async { Ok(vec![])});
-        let input = input.chain(marker);
-        let output_stream = input.flat_map(move |item| {
-            let chunk = item.expect("Invalid chunk");
-            let mut encapsulated_chunks: Vec<Res<Vec<u8>>> = Vec::new();
-            if !chunk.is_empty() {
-                let aad = "";
-                println!("Processing chunk {}", std::str::from_utf8(&chunk).unwrap());
-                let chunks = chunk.chunks(16000);
-                for part in chunks {
+                info!("Processing chunk {}", std::str::from_utf8(&current).unwrap());
+                if let Some(next) = chunked_stream.next().await {
                     let mut enc_response = Vec::new();
-                    let mut ct = self.aead.seal(aad.as_bytes(), part).unwrap();
+
+                    // Non-Final Response Chunk (..),
+                    let aad = "";
+                    let mut ct = self.aead.seal(aad.as_bytes(), &current).unwrap();
                     let mut enc_length = self.variant_encode(ct.len());
                     enc_response.append(&mut enc_length);
                     enc_response.append(&mut ct);
-                    println!("Encapsulated chunk {}", hex::encode(&enc_response));
-                    encapsulated_chunks.push(Ok(enc_response));
+                    info!("Encapsulated chunk {}", hex::encode(&enc_response));
+                    yield Ok(enc_response);
+                    current = next;
+                } else {
+                    let mut enc_response = Vec::new();
+
+                    // Final Response Chunk Indicator (i) = 0,
+                    let mut final_chunk_indicator = self.variant_encode(0);
+                    enc_response.append(&mut final_chunk_indicator);
+
+                    // AEAD-Protected Final Response Chunk (..),
+                    let aad = "final";
+                    let mut ct = self.aead.seal(aad.as_bytes(), &current).unwrap();
+                    let mut enc_length = self.variant_encode(ct.len());
+                    enc_response.append(&mut enc_length);
+                    enc_response.append(&mut ct);
+                    info!("Encapsulated final chunk {}", hex::encode(&enc_response));
+                    yield Ok(enc_response);
+                    return;
                 }
-            } else { 
-                let aad = "final";
-                let mut enc_response = Vec::new();
-                let mut ct = self.aead.seal(aad.as_bytes(), &vec![]).unwrap();
-                let mut enc_length = self.variant_encode(0);
-                enc_response.append(&mut enc_length);
-                enc_response.append(&mut ct);
-                println!("Encapsulated chunk {}", hex::encode(&enc_response));
-                encapsulated_chunks.push(Ok(enc_response));
             }
-            stream::iter(encapsulated_chunks)
-        });
-         */
+        };
+
         let stream = nonce_stream.chain(output_stream);
         Box::pin(stream)
     }
@@ -560,23 +519,24 @@ impl ClientResponse {
         }
 
         let output_stream = stream! {
-            let enc_response = stream.next().await.unwrap().unwrap();
-            let (len, bytes_read) = self.variant_decode(&enc_response).unwrap();
-            println!("inital length {}, {}", len, bytes_read);
-            if len != 0 {
-                let (_, ct) = enc_response.split_at(bytes_read);
-                let aad = "";
-                self.seq += 1;
-                yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct);
-            } else {
-                let (_, last) = enc_response.split_at(bytes_read);
-                let (len, bytes_read) = self.variant_decode(&last).unwrap();
-                println!("length {}, {}", len, bytes_read);
-                let (_, ct) = last.split_at(bytes_read);
-                let aad = "final";
-                self.seq += 1;
-                yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct);
-                return;
+            while let Some(next) = stream.next().await {
+                let enc_response = next.unwrap();
+                if enc_response.is_empty() { return };
+                info!("Decrypting chunk: {}({})", hex::encode(&enc_response), enc_response.len());
+                let (len, bytes_read) = self.variant_decode(&enc_response).unwrap();
+                if len != 0 {
+                    let aad = "";
+                    let (_, ct) = enc_response.split_at(bytes_read);
+                    self.seq += 1;
+                    yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct);
+                } else {
+                    let (_, rest) = enc_response.split_at(bytes_read);
+                    let (_, bytes_read) = self.variant_decode(&rest).unwrap();
+                    let (_, ct) = rest.split_at(bytes_read);
+                    let aad = "final";
+                    self.seq += 1;
+                    yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct);
+                }
             }
         };
 

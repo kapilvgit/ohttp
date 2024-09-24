@@ -5,7 +5,6 @@ TARGET ?= http://127.0.0.1:3000
 TARGET_PATH ?= '/whisper'
 INPUT ?= ./examples/audio.mp3
 
-
 ca:
 	./ohttp-server/ca.sh
 
@@ -33,10 +32,10 @@ run-server-attest: ca
 		--attest --maa_url ${MAA} --kms_url ${KMS}
 
 run-server-container: 
-	docker run --privileged -e TARGET=${TARGET} -e INSTANCE_SPECIFIC_KEY=1 --net=host  ohttp-server
+	docker compose -f ./docker/docker-compose-server.yml up
 
 run-server-container-attest: 
-	docker run --privileged -e TARGET=${TARGET}  --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+	docker run --privileged -e TARGET=${TARGET} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
 
 run-whisper:
 	docker run --network=host whisper-api 

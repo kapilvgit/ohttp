@@ -6,6 +6,7 @@ services:
     network_mode: "host"
     environment:
       - TARGET=http://localhost:3000
+      - INSTANCE_SPECIFIC_KEY=1
     depends_on:
       - whisper
 
