@@ -334,10 +334,6 @@ impl ServerResponse {
         Ok(enc_response)
     }
 
-    pub fn response_nonce(&mut self) -> Res<Vec<u8>> {
-        return Ok(self.response_nonce.clone());
-    }
-
     // Consume this object by encapsulating a stream
     // https://www.ietf.org/archive/id/draft-ohai-chunked-ohttp-01.html#name-response-format
     // Chunked Encapsulated Response {
@@ -364,7 +360,7 @@ impl ServerResponse {
         E: std::fmt::Debug + Send,
     {
         // Response Nonce (Nk)
-        let response_nonce = self.response_nonce();
+        let response_nonce = Ok(self.response_nonce.clone());
         let nonce_stream = once(async { response_nonce });
 
         let input = Box::pin(input);
@@ -468,7 +464,7 @@ impl ClientResponse {
         aead.open(&[], 0, ct) // 0 is the sequence number
     }
 
-    pub fn set_response_nonce(&mut self, enc_response: &[u8]) -> Res<()> {
+    fn set_response_nonce(&mut self, enc_response: &[u8]) -> Res<()> {
         let mid = entropy(self.hpke.config());
         if mid != enc_response.len() {
             return Err(Error::Truncated);
