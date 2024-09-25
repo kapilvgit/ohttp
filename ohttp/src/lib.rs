@@ -55,9 +55,6 @@ use crate::rh::{
     hpke::{Config as HpkeConfig, Exporter, HpkeR, HpkeS},
 };
 
-use colored::*;
-use serde::Deserialize;
-
 /// The request header is a `KeyId` and 2 each for KEM, KDF, and AEAD identifiers
 const REQUEST_HEADER_LEN: usize = size_of::<KeyId>() + 6;
 const INFO_REQUEST: &[u8] = b"message/bhttp request";
@@ -96,13 +93,6 @@ pub struct ClientRequest {
     header: Vec<u8>,
 }
 
-#[derive(Deserialize)]
-struct KmsKeyConfiguration {
-    #[serde(rename = "publicKey")]
-    key_config: String,
-    receipt: String,
-}
-
 #[cfg(feature = "client")]
 impl ClientRequest {
     /// Construct a `ClientRequest` from a specific `KeyConfig` instance.
@@ -132,39 +122,6 @@ impl ClientRequest {
     pub fn from_encoded_config_list(encoded_config_list: &[u8]) -> Res<Self> {
         let mut configs = KeyConfig::decode_list(encoded_config_list)?;
         if let Some(mut config) = configs.pop() {
-            Self::from_config(&mut config)
-        } else {
-            Err(Error::Unsupported)
-        }
-    }
-
-    /// Reads a json containing key configurations with receipts and constructs a single use client sender
-    /// from the first supported configuration.
-    /// See `KeyConfig::decode_list` for the structure details.
-    pub fn from_kms_config(config: &str, cert: &str) -> Res<Self> {
-        let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config).unwrap();
-        if let Some(kms_config) = kms_configs.pop() {
-            info!(
-                "{}",
-                "Establishing trust in key management service...".red()
-            );
-
-            let _ = verifier::verify(&kms_config.receipt, &cert)?;
-
-            info!(
-                "{}",
-                "The receipt for the generation of the OHTTP key is valid.".green()
-            );
-
-            let encoded_key = hex::decode(&kms_config.key_config).unwrap();
-            let mut config = KeyConfig::decode(&encoded_key)?;
-
-            info!(
-                "\n{} {}\n",
-                "Loaded OHTTP public key configuration: ".green(),
-                &kms_config.key_config
-            );
-
             Self::from_config(&mut config)
         } else {
             Err(Error::Unsupported)

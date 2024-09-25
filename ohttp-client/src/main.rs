@@ -1,6 +1,7 @@
 #![deny(clippy::pedantic)]
 
 use bhttp::{Message, Mode};
+use ohttp::ClientRequest;
 use std::{
     fs::{self, File}, io::{self, Read, Write}, ops::Deref, path::PathBuf, str::FromStr
 };
@@ -31,6 +32,7 @@ impl Deref for HexArg {
 }
 
 use log::info;
+use serde::Deserialize;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "ohttp-client", about = "Make an oblivious HTTP request.")]
@@ -156,6 +158,25 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
     Ok(body)
 }
 
+#[derive(Deserialize)]
+struct KmsKeyConfiguration {
+    #[serde(rename = "publicKey")]
+    key_config: String,
+    receipt: String,
+}
+
+/// Reads a json containing key configurations with receipts and constructs 
+/// a single use client sender from the first supported configuration.
+pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
+    let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
+    let kms_config = kms_configs.pop().unwrap();
+    info!("{}", "Establishing trust in key management service...");
+    let _ = verifier::verify(&kms_config.receipt, &cert)?;
+    info!("{}", "The receipt for the generation of the OHTTP key is valid.");
+    let encoded_config = hex::decode(&kms_config.key_config).unwrap();
+    Ok(ClientRequest::from_encoded_config(&encoded_config)?)
+}
+
 #[tokio::main]
 async fn main() -> Res<()> {
     let args = Args::from_args();
@@ -190,7 +211,7 @@ async fn main() -> Res<()> {
         let cert = fs::read_to_string(kms_cert)?;
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
         let config = get_kms_config(kms_url.to_string(), &cert).await?;
-        ohttp::ClientRequest::from_kms_config(&config, &cert)?
+        from_kms_config(&config, &cert)?
     } else {
         let config = &args.config.clone().expect("Config expected.");
         ohttp::ClientRequest::from_encoded_config_list(config)?
