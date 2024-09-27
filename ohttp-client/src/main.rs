@@ -209,6 +209,7 @@ async fn main() -> Res<()> {
     println!("\n================== STEP 2 ==================");
     let (enc_request, mut ohttp_response) = ohttp_request.encapsulate(&request_buf)?;
     println!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
+    fs::write("enc_request.bin", &enc_request)?;
 
     let client = match &args.trust {
         Some(pem) => {
