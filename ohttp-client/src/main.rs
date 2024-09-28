@@ -7,10 +7,12 @@ use std::{
 use std::io::Cursor;
 use structopt::StructOpt;
 use reqwest::Client;
+use reqwest::header::AUTHORIZATION;
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 const DEFAULT_KMS_URL: &str ="https://acceu-aml-504.confidential-ledger.azure.com";
+const TOKEN: &str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6Ikg5bmo1QU9Tc3dNcGhnMVNGeDdqYVYtbEI5dyIsImtpZCI6Ikg5bmo1QU9Tc3dNcGhnMVNGeDdqYVYtbEI5dyJ9.eyJhdWQiOiJodHRwczovL21sLmF6dXJlLmNvbSIsImlzcyI6Imh0dHBzOi8vc3RzLndpbmRvd3MubmV0LzMzZTAxOTIxLTRkNjQtNGY4Yy1hMDU1LTViZGFmZmQ1ZTMzZC8iLCJpYXQiOjE3MjczODMyMTMsIm5iZiI6MTcyNzM4MzIxMywiZXhwIjoxNzI3Mzg3NTgyLCJhY3IiOiIxIiwiYWlvIjoiQVdRQW0vOFhBQUFBOUdNS2RjNm4wZXZwdWlWaS92Z01yUEkyNUE5TG5NdkxST2tpeFNPdkJGMFBLMW9sTVYzWjZ0ZHRXSUdoNGJ3YVZIYVM5L0pZYkNhM3h6RFc1bW1yKy84akVHRSs4cEh0VDhXYTFoSzF5ZENnaEFDUldpUGxRL0lMQmhpbUIxbDciLCJhbXIiOlsicnNhIiwibWZhIl0sImFwcGlkIjoiZDczMDRkZjgtNzQxZi00N2QzLTliYzItZGYwZTI0ZTIwNzFmIiwiYXBwaWRhY3IiOiIwIiwiZGV2aWNlaWQiOiI2NWRjYWUwYi03NDI4LTQ1NWMtYjdhYS0yNTY1MDNhOTU0MzkiLCJmYW1pbHlfbmFtZSI6Ikdva2FybiIsImdpdmVuX25hbWUiOiJBcnRoaSIsImdyb3VwcyI6WyIyZjM4NDkwMC1kZTgwLTQ3OTYtOGQ4ZS03ODMyZjY1MmFlMjIiLCJlYmJlZjEwMi1lZDY1LTQzZjItYjcyYS04YzllMzRkNWYyYTgiLCJkMjE4YTMxNi1hNDg5LTQ0M2EtYTRhMC0yZTg5YzcwNDM0Y2MiLCJmOThlMWIxZC02OTc0LTQyZmItYTdjYi0zNmFkYzlmZWE1MGUiLCI2MDNkMDYyZC00ZGE1LTQzMGItODNhYS1kNmRkMmJmOTA2NzciLCJmOWIwMjgzMS02ZDZmLTQwNDktYWFiNC01ZWU2YzdjYTQ4MDIiLCIyNTkzYWUzNS04NDVjLTQyMWMtOThkOC1iNTIzODFkOGI2YWIiLCJiYmRlNWQzNy0yM2Q2LTQxZDUtOTA3MC0wNGQ1MDZiNzhiZjYiLCI4ZWRmYmYzOS1kMjg4LTQ1ZTUtODk3Mi00YzMzMzY3OGQ0NGEiLCI2NGY5OWM0Mi02M2U1LTRjYzAtOTJlZS0yOTUxNTEyOGEwMjciLCJlMjlkNjk1Mi0yYmFlLTRmZGEtYjdmZS00ZjdiZDJlNWM4NjIiLCJhYjhkNDY1NC0yZGFmLTQ0NjctYjVjOC04OGQ5NDBiNzQyMDUiLCI0Njk0NmI1NC1jZWM2LTRlNzQtOGE3My1kYzc0NWE3NjdiYzEiLCIyZjllNDM2Mi1hOWJlLTRkMzQtYjY5Mi0xYjc1M2Q3YjA4NDQiLCI5YzM4Mzc2My1kZmFkLTQ2NzEtYjRhMC1jNDYyYTEwMTg1NWYiLCJhOTE2Zjg2NC0wNzM0LTQ2N2YtYmE0Ni0zNjM5YjZkZjVhOGIiLCJmYmZjOTc2Ni0yYzMzLTRmOTUtYTE1MC0yYWNmYzM2YmVkMmYiLCI1ZjBlYjc2ZC1lNWM3LTQ0OTQtYTRhMC01MmMzMDg2YTQwYzEiLCJlYmVkMWM3Ni1hNmI4LTRlYjAtOWYwYS05YTdlZGE1ZjMwN2UiLCI3MzUyZjY4MC0zZWUxLTRkZGEtOTQwMS03NTU1M2E2MThlMGIiLCJiZWUwYmQ4Mi01YjQwLTQ0YjItYjYzNS02N2M4YTk0ODE5M2YiLCIwNTQ0Mzk4Ni0xY2ZhLTQ5NzMtYmZlMy00YjE0M2YzYmMyZjkiLCJmYzE5ZGE4Zi1jN2IxLTRiOGEtYTE0YS1kYTIyYjk0NjUzMmQiLCIyOTlhYjE5MC0yYjIxLTRmYjEtYTNiNS1lNTNiZGY3OTdjMWMiLCI2Zjg3NjI5Mi00OGZiLTQ2ZjktYTM2NC1hZjMwOGM4MzVkNmIiLCI5MGMzMDM5ZS05NWM4LTQyN2YtOGNlYy1lNGMxMGZmZDY2ZWQiLCJmYjExMDBhOS03NTNjLTQzNTQtODNkYi00OGFlMzU5MTAxOGYiLCI5YmFiOWViOC00YjYyLTQ5ZWUtYmM1ZC02NTRjNDA3YzJiMjMiLCIxODdhYzhjMS0wNmMwLTQ2YTItYjQ1NS03ZWI1ZDIyZmNiMjkiLCIwMjcyN2RjZC1mM2I4LTQ5ZjgtODQ2YS03Y2I5YzA5NjM5MzQiLCIzNjhjOTNjZS02NjBmLTQzNTgtYjBiYy1jYmM0YzEyNjcyODIiLCIzOThjMzRkOC04MWFlLTQxMTAtYjk0NS1iMmQwZTcxMWJmYzUiLCI0YmI1NDVlNy00NzgwLTRjMzItYWUwYi04MzNhNTlkYzc5ZjYiLCI5Y2VhNzdmNC05NzY4LTRiNzItOWU5NS00YWY5YTlmMDkwN2MiXSwiaWR0eXAiOiJ1c2VyIiwiaXBhZGRyIjoiMjAwMTo0ODk4OmIwODA6MDo3Zjk5OjoxNiIsIm5hbWUiOiJBcnRoaSBHb2thcm4gKEFSVEhJRykiLCJvaWQiOiI5ZDkzNTc1MS0yNzY4LTRjOWUtODYyOS05ZTkwZmYxMzY2YmMiLCJvbnByZW1fc2lkIjoiUy0xLTUtMjEtNDEyOTg2ODIyNS0xMzI4NTgxMTI2LTM4OTc1NzE0NDYtMTQ4ODM2IiwicHVpZCI6IjEwMDMyMDAyOTI5M0ZBRTUiLCJyaCI6IjAuQVRNQUlSbmdNMlJOakUtZ1ZWdmFfOVhqUFY5dnBoamYyeGRNbmRjV05IRXFuTDR6QURRLiIsInNjcCI6InVzZXJfaW1wZXJzb25hdGlvbiIsInN1YiI6Ijk0VTFKZTVLZ2UzSmtCLUNnbnAybVhLM3dXMTBsYUlORzJBd1VGTWxWUU0iLCJ0aWQiOiIzM2UwMTkyMS00ZDY0LTRmOGMtYTA1NS01YmRhZmZkNWUzM2QiLCJ1bmlxdWVfbmFtZSI6IkFSVEhJR0BhbWUuZ2JsIiwidXBuIjoiQVJUSElHQGFtZS5nYmwiLCJ1dGkiOiJDLUF3ek1Fem5raWRUT1B6UHVxVUFBIiwidmVyIjoiMS4wIiwieG1zX2lkcmVsIjoiMSAzMCJ9.V7jJ2T1loJx0e-AYChFJHyg5lHmtnGuTTLED1YKZHwpAXnc7BXcmcz4xVyPeKV9OIzAHCfNLjjgg_3pQtQwIBgt3yTmFnwPX6r1faccDGsNthfKQK1Y7BLxiM0jDC0P2UHfBcZShpks5RtqWOhwn-xc6xKW9zzONTS2SodlcHvKL9H3iJI2JyqZ-xyk23uRK9n-w9lfVb7LFYfxECsRDYeG3rwIs1qpggk4GOAVdhDjImsnfDk_ItM5bUE-PCwzv8F1a7x-JIt72fzrxFZmkPw9xgNUpfbjhoJiQzy6ZCLGnFXnjZLenCZTie_POIuPH4A7rdK9fnvHBA61i8WReZQ";
 
 #[derive(Debug, Clone)]
 struct HexArg(Vec<u8>);
@@ -87,62 +89,62 @@ impl Args {
         }
     }
 }
+//accsingularity.azurecr.io/samples/ohttp-server:latest sha256:f6629aed9cc3683bc755e06baf720824cf7009c296fc1b831dafb4bf6e5f1737
+// curl -vv http://127.0.0.1:5002/v1/engines/whisper/audio/transcriptions -H "Content-Type: multipart/form-data" -H"Openai-Internal-AuthToken: testtoken" -H "Openai-Internal-EnableAsrSupport: true" -F file="@./whatstheweatherlike.wav" -F model="whisper"
 
 // Create a multi-part request from a file
 fn create_multipart_request(target_path: &str, file: &PathBuf) -> Res<Vec<u8>> {
     // Define boundary for multipart
     let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
 
+    let mut request = Vec::new();
+    // Start of the request
+    write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
+    
+    // Headers
+    write!(&mut request, "openai-internal-authtoken: \"testtoken\"\r\n")?;
+    write!(&mut request, "openai-internal-enableasrsupport: \"true\"\r\n")?;
+    write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
+
+    // Placeholder for Content-Length, will fill in later
+    let content_length_pos = request.len();
+
+    // Start of the body
+    write!(&mut request, "\r\n")?; // Empty line to separate headers from body
+
+    // File part
+    write!(&mut request, "--{}\r\n", boundary)?;
+    write!(&mut request, "Content-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\n")?;
+    write!(&mut request, "Content-Type: audio/mpeg\r\n\r\n")?;
+
+    // Here you'd read the file and write its content to the request
+    
     // Load audio file
     let mut file = File::open(file)?;
     let mut file_contents = Vec::new();
     file.read_to_end(&mut file_contents)?;
+    request.append(&mut file_contents);
+    // End of file part
+    write!(&mut request, "\r\n--{}\r\n", boundary)?;
 
-    // Create multipart body
-    let mut body = Vec::new();
+    // Model part
+    write!(&mut request, "Content-Disposition: form-data; name=\"model\"\r\n\r\n")?;
+    write!(&mut request, "whisper\r\n")?;
 
-    // Add the file
-    write!(
-        &mut body,
-        "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: {}\r\n\r\n",
-        boundary,
-        "audio/mp3"
-    )?;
-    body.extend_from_slice(&file_contents);
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+    // Closing boundary
+    write!(&mut request, "--{}--\r\n", boundary)?;
 
-    // Add the response format
-    write!(
-        &mut body,
-        "\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\n",
-    )?;
-    write!(&mut body, "verbose_json")?;
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+    // Calculate Content-Length
+    let content_length = request.len() - content_length_pos; 
 
-    // Add the model
-    write!(
-        &mut body,
-        "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n",
-    )?;
-    write!(&mut body, "whisper-3")?;
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
-
-    // Add language
-    write!(
-        &mut body,
-        "\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\n",
-    )?;
-    write!(&mut body, "en")?;
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+    // Overwrite the placeholder with the real content length
+    write!(&mut request, "Content-Length: {} \r\n", content_length)?;
     
-    let mut request = Vec::new();
-    write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
-    write!(&mut request, "openai-internal-authtoken: \"testtoken\"\r\n")?;
-    write!(&mut request, "openai-internal-enableasrsupport: \"true\"\r\n")?;
-    write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
-    write!(&mut request, "Content-Length: {}\r\n", body.len())?;
-    write!(&mut request, "\r\n")?;
-    request.append(&mut body);
+    // At this point, `request` contains the complete HTTP request with multipart/form-data.
+
+    // For demonstration, print the request
+    println!("{:?}", String::from_utf8_lossy(&request));
+
     Ok(request)
 }
 
@@ -226,7 +228,9 @@ async fn main() -> Res<()> {
 
     let mut builder = client
         .post(&args.url)
-        .header("content-type", "message/ohttp-chunked-req");
+        .header("content-type", "message/ohttp-chunked-req")
+        .header(AUTHORIZATION, format!("Bearer {}", TOKEN))
+        .header("azureml-model-deployment", "arthig-deploy15");
 
     if let Some(key) = &args.api_key {
         builder = builder.header("api-key", key)

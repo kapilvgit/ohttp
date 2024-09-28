@@ -1,8 +1,8 @@
 KMS ?= https://acceu-aml-504.confidential-ledger.azure.com
 MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
-TARGET ?= http://127.0.0.1:3000
-# TARGET_PATH ?= '/v1/audio/transcriptions'
-TARGET_PATH ?= '/whisper'
+#TARGET ?= https://arthig-ep.eastus2.inference.ml.azure.com/score
+TARGET ?= http://127.0.0.1:5001
+TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
 INPUT ?= ./examples/audio.mp3
 
 
