@@ -5,10 +5,7 @@ if [[ -z ${TARGET} ]]; then
   exit 1
 fi
 
-# Generate certificate for TLS
-/usr/local/bin/ca.sh
-
-CMD="/usr/local/bin/ohttp-server --certificate /usr/local/bin/server.crt --key /usr/local/bin/server.key --target $TARGET"
+CMD="/usr/local/bin/ohttp-server --target $TARGET"
 
 if [[ -z ${INSTANCE_SPECIFIC_KEY} ]]; then
    CMD="$CMD --attest"
