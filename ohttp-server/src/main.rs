@@ -87,6 +87,8 @@ async fn generate_reply(
     target: Url,
     _mode: Mode,
 ) -> Res<(Response, ServerResponse)> {
+
+    println!("Tien is here11111");
     let ohttp = ohttp_ref.lock().await;
     let (request, server_response) = ohttp.decapsulate(enc_request)?;
     let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
@@ -106,6 +108,7 @@ async fn generate_reply(
     }
 
     let mut t = target;
+    println!("Tien print target {}: ", &t);
     if let Some(path_bytes) = bin_request.control().path() {
         if let Ok(path_str) = std::str::from_utf8(path_bytes) {
             t.set_path(path_str);
@@ -131,6 +134,7 @@ async fn score(
     target: Url,
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
+    println!("Tien is here222222");
     match generate_reply(&ohttp, &body[..], target, mode).await {
         Ok((response, mut server_response)) => {
             let response_nonce = server_response.response_nonce();
