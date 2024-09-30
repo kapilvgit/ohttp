@@ -1,8 +1,8 @@
 KMS ?= https://acceu-aml-504.confidential-ledger.azure.com
 MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
-TARGET ?= http://127.0.0.1:3000
+TARGET ?= http://127.0.0.1:5002
 # TARGET_PATH ?= '/v1/audio/transcriptions'
-TARGET_PATH ?= '/whisper'
+TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
 INPUT ?= ./examples/audio.mp3
 
 
@@ -50,11 +50,11 @@ verify-quote:
 	
 run-client-kms: ca service-cert verify-quote
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' --target-path ${TARGET_PATH} -i ${INPUT} \
+  'http://localhost:9443/score' --target-path ${TARGET_PATH} -i ${INPUT} \
   --kms-cert ./service_cert.pem 
 
 run-client-local: ca
 	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' --target-path ${TARGET_PATH} -i ${INPUT} \
-  --config `curl -s -k https://localhost:9443/discover`
+  'http://localhost:9443/score' --target-path ${TARGET_PATH} -i ${INPUT} \
+  --config `curl -s -k http://localhost:9443/discover`
 

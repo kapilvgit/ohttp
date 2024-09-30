@@ -330,9 +330,6 @@ async fn main() -> Res<()> {
     let routes = score.or(discover);
 
     warp::serve(routes)
-        .tls()
-        .cert_path(args.certificate)
-        .key_path(args.key)
         .run(args.address)
         .await;
 
