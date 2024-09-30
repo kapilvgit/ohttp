@@ -93,6 +93,7 @@ async fn generate_reply(
     _mode: Mode,
 ) -> Res<(Response, ServerResponse)> {
     let ohttp = ohttp_ref.lock().await;
+    info!("Recevied encapsulated score request for target {}", target);
     let (request, server_response) = ohttp.decapsulate(enc_request)?;
     let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
 

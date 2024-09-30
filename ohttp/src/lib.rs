@@ -63,8 +63,6 @@ const INFO_LEN: usize = INFO_REQUEST.len() + 1 + REQUEST_HEADER_LEN;
 const LABEL_RESPONSE: &[u8] = b"message/bhttp response";
 const INFO_KEY: &[u8] = b"key";
 const INFO_NONCE: &[u8] = b"nonce";
-/// Max size of a chunk
-const CHUNK_SIZE: usize = 16000;
 
 /// The type of a key identifier.
 pub type KeyId = u8;
@@ -320,21 +318,15 @@ impl ServerResponse {
         info!("Response nonce {}", hex::encode(&self.response_nonce.clone()));
         let nonce_stream = once(async { response_nonce });
 
-        let input = Box::pin(input);
-
-        // Split chunks into CHUNK_SIZE elements
-        let mut chunked_stream = input.flat_map(|item| {
-            let chunk = item.unwrap();
-            let chunks: Vec<Vec<u8>> = chunk.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
-            futures_util::stream::iter(chunks)
-        });
-
+        let mut input = Box::pin(input);
         let output_stream = stream! {
-            let current = chunked_stream.next().await;
-            let Some(mut current) = current else { return };
+            let current = input.next().await;
+            let Some(current) = current else { return };
+            let Ok(mut current) = current else { return };
+            
             loop {
                 info!("Processing chunk {}", std::str::from_utf8(&current).unwrap());
-                if let Some(next) = chunked_stream.next().await {
+                if let Some(next) = input.next().await {
                     let mut enc_response = Vec::new();
 
                     // Non-Final Response Chunk (..),
@@ -349,7 +341,7 @@ impl ServerResponse {
 
                     info!("Encapsulated chunk {}", hex::encode(&enc_response));
                     yield Ok(enc_response);
-                    current = next;
+                    current = next.unwrap();
                 } else {
                     let mut enc_response = Vec::new();
 
@@ -478,15 +470,21 @@ impl ClientResponse {
 
         let output_stream = stream! {
             while let Some(next) = stream.next().await {
-                let enc_response = next.unwrap();
+                let mut enc_response = next.unwrap();
                 if enc_response.is_empty() { return };
                 info!("Decrypting chunk: {}({})", hex::encode(&enc_response), enc_response.len());
                 let (len, bytes_read) = self.variant_decode(&enc_response).unwrap();
                 if len != 0 {
                     let aad = "";
                     let (_, ct) = enc_response.split_at(bytes_read);
+                    let mut current = ct.to_vec();
+                    while (current.len() as u64) < len {
+                        enc_response = stream.next().await.unwrap().unwrap();
+                        info!("Appending chunk: {}({})", hex::encode(&enc_response), enc_response.len());
+                        current.append(&mut enc_response);
+                    }
                     self.seq += 1;
-                    yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct);
+                    yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, &current);
                 } else {
                     let (_, rest) = enc_response.split_at(bytes_read);
                     let (_, bytes_read) = self.variant_decode(&rest).unwrap();
