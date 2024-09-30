@@ -1,6 +1,6 @@
 #![deny(clippy::pedantic)]
 
-use std::{io::Cursor, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{io::Cursor, net::SocketAddr, sync::Arc};
 
 use futures_util::stream::unfold;
 use reqwest::{
@@ -14,7 +14,7 @@ use ohttp::{
     hpke::{Aead, Kdf, Kem},
     KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
 };
-use structopt::StructOpt;
+use clap::Parser;
 use warp::hyper::Body;
 use warp::Filter;
 
@@ -44,39 +44,31 @@ struct ExportedKey {
 const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.com/key";
 const DEFAULT_MAA_URL: &str = "https://sharedeus2.eus2.attest.azure.net";
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
+#[derive(Debug, Parser)]
+#[command(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
 struct Args {
     /// The address to bind to.
-    #[structopt(default_value = "127.0.0.1:9443")]
+    #[arg(default_value = "127.0.0.1:9443")]
     address: SocketAddr,
 
     /// When creating message/bhttp, use the indeterminate-length form.
-    #[structopt(long, short = "n", alias = "indefinite")]
+    #[arg(long, short = 'n', alias = "indefinite")]
     indeterminate: bool,
 
-    /// Certificate to use for serving.
-    #[structopt(long, short = "c", default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/server.crt"))]
-    certificate: PathBuf,
-
-    /// Key for the certificate to use for serving.
-    #[structopt(long, short = "k", default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/server.key"))]
-    key: PathBuf,
-
     /// Target server
-    #[structopt(long, short = "t", default_value = "http://127.0.0.1:8000")]
+    #[arg(long, short = 't', default_value = "http://127.0.0.1:8000")]
     target: Url,
 
     /// Obtain key configuration from a KMS after attestation
-    #[structopt(long, short = "a")]
+    #[arg(long, short = 'a')]
     attest: bool,
 
     /// MAA endpoint
-    #[structopt(long, short = "m")]
+    #[arg(long, short = 'm')]
     maa_url: Option<String>,
 
     /// KMS endpoint
-    #[structopt(long, short = "s")]
+    #[arg(long, short = 's')]
     kms_url: Option<String>,
 
     /// Enable tracing
@@ -311,7 +303,7 @@ async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
 
 #[tokio::main]
 async fn main() -> Res<()> {
-    let args = Args::from_args();
+    let args = Args::parse();
     ::ohttp::init();
     env_logger::try_init().unwrap();
 
@@ -355,9 +347,6 @@ async fn main() -> Res<()> {
     let routes = score.or(discover);
 
     warp::serve(routes)
-        .tls()
-        .cert_path(args.certificate)
-        .key_path(args.key)
         .run(args.address)
         .await;
 

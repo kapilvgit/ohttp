@@ -5,13 +5,10 @@ TARGET ?= http://127.0.0.1:3000
 TARGET_PATH ?= '/whisper'
 INPUT ?= ./examples/audio.mp3
 
-ca:
-	./ohttp-server/ca.sh
-
 build-whisper:
 	docker build -f docker/whisper/Dockerfile -t whisper-api ./docker/whisper
 
-build-server: ca
+build-server:
 	docker build -f docker/server/Dockerfile -t ohttp-server .
 
 build-client:
@@ -22,11 +19,10 @@ build-streaming:
 
 build: build-server build-client build-streaming build-whisper
 
-run-server: ca
-	cargo run --bin ohttp-server -- --certificate ./ohttp-server/server.crt \
-		--key ./ohttp-server/server.key --target ${TARGET} 
+run-server:
+	cargo run --bin ohttp-server -- --target ${TARGET} 
 
-run-server-attest: ca
+run-server-attest:
 	cargo run --bin ohttp-server -- --certificate ./ohttp-server/server.crt \
 		--key ./ohttp-server/server.key --target ${TARGET} \
 		--attest --maa_url ${MAA} --kms_url ${KMS}
@@ -55,13 +51,12 @@ service-cert:
 verify-quote:
 	verify_quote.sh ${KMS} --cacert service_cert.pem
 	
-run-client-kms: ca service-cert verify-quote
-	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' --target-path ${TARGET_PATH} -i ${INPUT} \
+run-client-kms: service-cert verify-quote
+	cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem 
 
-run-client-local: ca
-	cargo run --bin ohttp-client -- --trust ./ohttp-server/ca.crt \
-  'https://localhost:9443/score' --target-path ${TARGET_PATH} -i ${INPUT} \
-  --config `curl -s -k https://localhost:9443/discover` --api-key test123
-
+run-client-local:
+	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
+  -H "api-key: test123" --config `curl -s http://localhost:9443/discover` 

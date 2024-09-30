@@ -6,10 +6,12 @@ use std::{
     fs::{self, File}, io::{self, Read, Write}, ops::Deref, path::PathBuf, str::FromStr
 };
 use std::io::Cursor;
-use structopt::StructOpt;
+use clap::Parser;
 use reqwest::Client;
 use futures_util::stream::unfold;
 use futures_util::StreamExt;
+use log::info;
+use serde::Deserialize;
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -31,11 +33,8 @@ impl Deref for HexArg {
     }
 }
 
-use log::info;
-use serde::Deserialize;
-
-#[derive(Debug, StructOpt)]
-#[structopt(name = "ohttp-client", about = "Make an oblivious HTTP request.")]
+#[derive(Debug, Parser)]
+#[command(version = "0.1", about = "Make an oblivious HTTP request.")]
 struct Args {
     /// The URL of an oblivious proxy resource.
     /// If you use an oblivious request resource, this also works, though
@@ -43,98 +42,98 @@ struct Args {
     url: String,
 
     /// Target path of the oblivious resource
-    #[structopt(long, short = "p")]
+    #[arg(long, short = 'p')]
     target_path: String,
 
     /// key configuration
-    #[structopt(long, short = "c")]
+    #[arg(long, short = 'c')]
     config: Option<HexArg>,
 
     /// json containing the key configuration along with proof
-    #[structopt(long, short = "f")]
+    #[arg(long, short = 'f')]
     kms_url: Option<String>,
 
     /// Trusted KMS service certificate
-    #[structopt(long, short = "k")]
+    #[arg(long, short = 'k')]
     kms_cert: Option<PathBuf>,
-
-    /// Where to read request content.
-    /// If you omit this, input is read from `stdin`.
-    #[structopt(long, short = "i")]
-    input: Option<PathBuf>,
 
     /// Where to write response content.
     /// If you omit this, output is written to `stdout`.
-    #[structopt(long, short = "o")]
+    #[arg(long, short = 'o')]
     output: Option<PathBuf>,
 
     /// Read and write as binary HTTP messages instead of text.
-    #[structopt(long, short = "b")]
+    #[arg(long, short = 'b')]
     binary: bool,
 
-    /// Enable override for the trust store.
-    #[structopt(long)]
-    trust: Option<PathBuf>,
+    /// When creating message/bhttp, use the indeterminate-length form.
+    #[arg(long, short = 'n', alias = "indefinite")]
+    indeterminate: bool,
 
-    #[structopt(long, short = "a")]
-    api_key: Option<String>
+    /// List of headers in the outer request
+    #[arg(long, short = 'H')]
+    headers: Option<Vec<String>>,
+
+    /// List of headers in the outer request
+    #[arg(long, short = 'F')]
+    form_fields: Option<Vec<String>>,
+
+    /// List of headers in the outer request
+    #[arg(long, short = 'O')]
+    outer_headers: Option<Vec<String>>,
 }
 
 // Create a multi-part request from a file
-fn create_multipart_request(target_path: &str, file: &PathBuf) -> Res<Vec<u8>> {
+fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fields: Option<Vec<String>>) -> Res<Vec<u8>> {
     // Define boundary for multipart
     let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
 
-    // Load audio file
-    let mut file = File::open(file)?;
-    let mut file_contents = Vec::new();
-    file.read_to_end(&mut file_contents)?;
+    let mut request = Vec::new();
+    write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
+
+    if let Some(headers) = headers {
+        for header in headers {
+            write!(&mut request, "{}\r\n", header)?;
+        }
+    }
 
     // Create multipart body
     let mut body = Vec::new();
 
-    // Add the file
-    write!(
-        &mut body,
-        "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: {}\r\n\r\n",
-        boundary,
-        "audio/mp3"
-    )?;
-    body.extend_from_slice(&file_contents);
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+    if let Some(fields) = fields {
+        for field in fields {
+            let mut parts = field.splitn(2, '=');
+            let name = parts.next().unwrap();
+            let value = parts.next().unwrap();
 
-    // Add the response format
-    write!(
-        &mut body,
-        "\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\n",
-    )?;
-    write!(&mut body, "verbose_json")?;
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+            if value.starts_with('@') {
+                let filename = value.strip_prefix('@').unwrap();
+                let mut file = File::open(filename)?;
+                let mut file_contents = Vec::new();
+                file.read_to_end(&mut file_contents)?;
 
-    // Add the model
-    write!(
-        &mut body,
-        "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n",
-    )?;
-    write!(&mut body, "whisper-3")?;
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
-
-    // Add language
-    write!(
-        &mut body,
-        "\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\n",
-    )?;
-    write!(&mut body, "en")?;
-    write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+                // Add the file
+                write!(
+                    &mut body,
+                    "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+                    boundary, filename, "audio/mp3"
+                )?;
+                body.extend_from_slice(&file_contents);
+            } else {
+                write!(&mut body, "\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n", name)?;
+                write!(&mut body, "{}", value)?;
+            }
+            write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+        }
+    }
     
-    let mut request = Vec::new();
-    write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
-    write!(&mut request, "openai-internal-authtoken: \"testtoken\"\r\n")?;
-    write!(&mut request, "openai-internal-enableasrsupport: \"true\"\r\n")?;
     write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
     write!(&mut request, "Content-Length: {}\r\n", body.len())?;
     write!(&mut request, "\r\n")?;
+    info!("Sending request\n{}", std::str::from_utf8(&request).unwrap());
+    io::stdout().write_all(&body).unwrap();
     request.append(&mut body);
+
     Ok(request)
 }
 
@@ -179,28 +178,21 @@ pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
 
 #[tokio::main]
 async fn main() -> Res<()> {
-    let args = Args::from_args();
+    let args = Args::parse();
     ::ohttp::init();
     env_logger::try_init().unwrap();
 
     info!("================== STEP 1 ==================");
 
-    let request = if let Some(infile) = &args.input {
-        let request = create_multipart_request(&args.target_path, infile)?;
+    let request = { 
+        let form_fields = args.form_fields.clone();
+        let headers = args.headers.clone();
+        let request = create_multipart_request(&args.target_path, headers, form_fields)?;
         let mut cursor = Cursor::new(request);
         if args.binary {
             Message::read_bhttp(&mut cursor)?
         } else {
             Message::read_http(&mut cursor)?
-        }
-    } else {
-        let mut buf = Vec::new();
-        std::io::stdin().read_to_end(&mut buf)?;
-        let mut r = io::Cursor::new(buf);
-        if args.binary {
-            Message::read_bhttp(&mut r)?
-        } else {
-            Message::read_http(&mut r)?
         }
     };
 
@@ -217,29 +209,24 @@ async fn main() -> Res<()> {
         ohttp::ClientRequest::from_encoded_config_list(config)?
     };
 
-    info!("================== STEP 2 ==================");
+    println!("\n================== STEP 2 ==================");
+    
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    info!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
+    println!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
 
-    let client = match &args.trust {
-        Some(pem) => {
-            let mut buf = Vec::new();
-            File::open(pem)?.read_to_end(&mut buf)?;
-            let cert = reqwest::Certificate::from_pem(buf.as_slice())?;
-            reqwest::ClientBuilder::new()
-                .danger_accept_invalid_certs(true)
-                .add_root_certificate(cert)
-                .build()?
-        }
-        None => reqwest::ClientBuilder::new().danger_accept_invalid_certs(true).build()?,
-    };
+    let client = reqwest::ClientBuilder::new().build()?;
 
     let mut builder = client
         .post(&args.url)
         .header("content-type", "message/ohttp-chunked-req");
 
-    if let Some(key) = &args.api_key {
-        builder = builder.header("api-key", key)
+    // Add outer headers
+    let outer_headers = args.outer_headers.clone();
+    if let Some(headers) =  outer_headers {
+        for header in headers {
+            let mut parts = header.splitn(2, ':');
+            builder = builder.header(parts.next().unwrap(), parts.next().unwrap());
+        }
     }
     
     let response = builder

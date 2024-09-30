@@ -19,7 +19,7 @@ if [[ -z ${TARGET} ]]; then
 fi
 
 if is_valid_url $TARGET; then 
-  CMD="RUST_LOG=info /usr/local/bin/ohttp-server --certificate /usr/local/bin/server.crt --key /usr/local/bin/server.key --target $TARGET"
+  CMD="RUST_LOG=info /usr/local/bin/ohttp-server --target $TARGET"
 else
   echo "TARGET is not a valid URL"
   exit 1
@@ -46,9 +46,6 @@ if [[ -n ${KMS_URL} ]]; then
     exit 1
   fi
 fi
-
-# Generate certificate for TLS
-/usr/local/bin/ca.sh
 
 # Run OHTTP server
 echo "Running $CMD..."
