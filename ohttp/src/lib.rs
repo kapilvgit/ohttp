@@ -63,6 +63,8 @@ const INFO_LEN: usize = INFO_REQUEST.len() + 1 + REQUEST_HEADER_LEN;
 const LABEL_RESPONSE: &[u8] = b"message/bhttp response";
 const INFO_KEY: &[u8] = b"key";
 const INFO_NONCE: &[u8] = b"nonce";
+/// Max size of a chunk
+const CHUNK_SIZE: usize = 16000;
 
 /// The type of a key identifier.
 pub type KeyId = u8;
@@ -252,9 +254,6 @@ pub struct ServerResponse {
     aead: Aead,
 }
 
-// Max size of a chunk
-const CHUNK_SIZE: usize = 16000;
-
 #[cfg(feature = "server")]
 impl ServerResponse {
     fn new(hpke: &HpkeR, enc: Vec<u8>) -> Res<Self> {
@@ -318,6 +317,7 @@ impl ServerResponse {
     {
         // Response Nonce (Nk)
         let response_nonce = Ok(self.response_nonce.clone());
+        info!("Response nonce {}", hex::encode(&self.response_nonce.clone()));
         let nonce_stream = once(async { response_nonce });
 
         let input = Box::pin(input);
@@ -341,8 +341,12 @@ impl ServerResponse {
                     let aad = "";
                     let mut ct = self.aead.seal(aad.as_bytes(), &current).unwrap();
                     let mut enc_length = self.variant_encode(ct.len());
+                    // Length (i) = 1..,
                     enc_response.append(&mut enc_length);
+
+                    // AEAD-Protected Chunk (..),
                     enc_response.append(&mut ct);
+
                     info!("Encapsulated chunk {}", hex::encode(&enc_response));
                     yield Ok(enc_response);
                     current = next;
@@ -468,6 +472,7 @@ impl ClientResponse {
         // Response Nonce (Nk)
         if let Some(nonce) = stream.next().await {
             let enc_response = nonce.unwrap();
+            info!("Setting response nonce: {}({})", hex::encode(&enc_response), enc_response.len());
             self.set_response_nonce(&enc_response).unwrap();
         }
 

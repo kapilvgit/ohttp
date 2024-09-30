@@ -130,8 +130,6 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
     write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
     write!(&mut request, "Content-Length: {}\r\n", body.len())?;
     write!(&mut request, "\r\n")?;
-    info!("Sending request\n{}", std::str::from_utf8(&request).unwrap());
-    io::stdout().write_all(&body).unwrap();
     request.append(&mut body);
 
     Ok(request)
@@ -209,10 +207,10 @@ async fn main() -> Res<()> {
         ohttp::ClientRequest::from_encoded_config_list(config)?
     };
 
-    println!("\n================== STEP 2 ==================");
+    info!("================== STEP 2 ==================");
     
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    println!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
+    info!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
 
     let client = reqwest::ClientBuilder::new().build()?;
 
