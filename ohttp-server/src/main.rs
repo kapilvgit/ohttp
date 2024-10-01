@@ -104,6 +104,12 @@ async fn generate_reply(
         );
     }
 
+    for (name, value) in headers.iter() {
+        // Note that HeaderName implements Debug but not Display, 
+        // so we use {:?} for formatting
+        println!("Header: {:?} = {:?}", name, value);
+    }
+
     let mut t = target;
     if let Some(path_bytes) = bin_request.control().path() {
         if let Ok(path_str) = std::str::from_utf8(path_bytes) {

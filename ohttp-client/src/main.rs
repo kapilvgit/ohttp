@@ -109,8 +109,7 @@ fn create_multipart_request(target_path: &str, file: &PathBuf) -> Res<Vec<u8>> {
 
     let mut request = Vec::new();
     write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
-    write!(&mut request, "openai-internal-authtoken: \"testtoken\"\r\n")?;
-    write!(&mut request, "openai-internal-enableasrsupport: \"true\"\r\n")?;
+    write!(&mut request, "openai-internal-enableasrsupport: true\r\n")?;
     write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
     write!(&mut request, "Content-Length: {}\r\n", body.len())?;
     write!(&mut request, "\r\n")?;
