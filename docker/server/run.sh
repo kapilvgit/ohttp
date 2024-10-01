@@ -26,7 +26,11 @@ else
 fi
 
 if [[ -z ${INSTANCE_SPECIFIC_KEY} ]]; then
-   CMD="$CMD --attest"
+  CMD="$CMD --attest"
+fi
+
+if [[ -n ${INJECT_HEADERS} ]]; then 
+  CMD="$CMD -i ${INJECT_HEADERS}"
 fi
 
 if [[ -n ${MAA_URL} ]]; then 

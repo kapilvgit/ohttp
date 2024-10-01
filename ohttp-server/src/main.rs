@@ -10,11 +10,11 @@ use reqwest::{
 use tokio::sync::Mutex;
 
 use bhttp::{Message, Mode};
+use clap::Parser;
 use ohttp::{
     hpke::{Aead, Kdf, Kem},
     KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
 };
-use clap::Parser;
 use warp::hyper::Body;
 use warp::Filter;
 
@@ -32,7 +32,7 @@ use serde_json::from_str;
 use hpke::Deserializable;
 use serde::Deserialize;
 
-use log::{info, trace, error};
+use log::{error, info, trace};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -43,6 +43,7 @@ struct ExportedKey {
 
 const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.com/key";
 const DEFAULT_MAA_URL: &str = "https://sharedeus2.eus2.attest.azure.net";
+const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 
 #[derive(Debug, Parser)]
 #[command(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
@@ -71,9 +72,8 @@ struct Args {
     #[arg(long, short = 's')]
     kms_url: Option<String>,
 
-    /// Enable tracing
-    #[structopt(long)]
-    trace: bool,
+    #[arg(long, short = 'i')]
+    inject_request_headers: Vec<String>,
 }
 
 impl Args {
@@ -84,101 +84,6 @@ impl Args {
             Mode::KnownLength
         }
     }
-}
-
-async fn generate_reply(
-    ohttp_ref: &Arc<Mutex<OhttpServer>>,
-    enc_request: &[u8],
-    target: Url,
-    _mode: Mode,
-) -> Res<(Response, ServerResponse)> {
-    let ohttp = ohttp_ref.lock().await;
-    info!("Recevied encapsulated score request for target {}", target);
-    let (request, server_response) = ohttp.decapsulate(enc_request)?;
-    let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
-
-    let method: Method = if let Some(method_bytes) = bin_request.control().method() {
-        Method::from_bytes(method_bytes)?
-    } else {
-        Method::GET
-    };
-
-    let mut headers = HeaderMap::new();
-    for field in bin_request.header().fields() {
-        headers.append(
-            HeaderName::from_bytes(field.name()).unwrap(),
-            HeaderValue::from_bytes(field.value()).unwrap(),
-        );
-    }
-
-    let mut t = target;
-    if let Some(path_bytes) = bin_request.control().path() {
-        if let Ok(path_str) = std::str::from_utf8(path_bytes) {
-            t.set_path(path_str);
-        }
-    }
-
-    let client = reqwest::ClientBuilder::new().build()?;
-    let response = client
-        .request(method, t)
-        .headers(headers)
-        .body(bin_request.content().to_vec())
-        .send()
-        .await?
-        .error_for_status()?;
-
-    Ok((response, server_response))
-}
-
-#[allow(clippy::unused_async)]
-async fn score(
-    body: warp::hyper::body::Bytes,
-    ohttp: Arc<Mutex<OhttpServer>>,
-    target: Url,
-    mode: Mode,
-) -> Result<impl warp::Reply, std::convert::Infallible> {
-    match generate_reply(&ohttp, &body[..], target, mode).await {
-        Ok((response, server_response)) => {
-            let stream = Box::pin(unfold(response, |mut response| async move {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response)),
-                    _ => None,
-                }
-            }));
-        
-            let stream = server_response.encapsulate_stream(stream);
-            Ok(warp::http::Response::builder()
-                .header("Content-Type", "message/ohttp-chunked-res")
-                .body(Body::wrap_stream(stream)))
-        }
-        Err(e) => {
-            error!("400 {}", e.to_string());
-            if let Ok(oe) = e.downcast::<::ohttp::Error>() {
-                Ok(warp::http::Response::builder()
-                    .status(422)
-                    .body(Body::from(format!("Error: {oe:?}"))))
-            } else {
-                Ok(warp::http::Response::builder()
-                    .status(400)
-                    .body(Body::from(&b"Request error"[..])))
-            }
-        }
-    }
-}
-
-#[allow(clippy::unused_async)]
-async fn discover(
-    config: String,
-) -> Result<impl warp::Reply, std::convert::Infallible> {
-    Ok(warp::http::Response::builder()
-        .status(200)
-        .body(Vec::from(config)))
-}
-
-fn with_ohttp(
-    ohttp: Arc<Mutex<OhttpServer>>,
-) -> impl Filter<Extract = (Arc<Mutex<OhttpServer>>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || Arc::clone(&ohttp))
 }
 
 async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
@@ -213,7 +118,8 @@ async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
                 retries += 1;
                 trace!(
                     "Received 202 status code, retrying... (attempt {}/{})",
-                    retries, max_retries
+                    retries,
+                    max_retries
                 );
                 sleep(Duration::from_secs(1)).await;
             } else {
@@ -302,6 +208,155 @@ async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
     Ok(config)
 }
 
+async fn generate_reply(
+    ohttp_ref: &Arc<Mutex<OhttpServer>>,
+    inject_headers: HeaderMap,
+    enc_request: &[u8],
+    target: Url,
+    _mode: Mode,
+) -> Res<(Response, ServerResponse)> {
+    let ohttp = ohttp_ref.lock().await;
+    let (request, server_response) = ohttp.decapsulate(enc_request)?;
+    let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
+
+    let method: Method = if let Some(method_bytes) = bin_request.control().method() {
+        Method::from_bytes(method_bytes)?
+    } else {
+        Method::GET
+    };
+
+    // Copy headers from the encapsulated request
+    info!("Inner request headers");
+    let mut headers = HeaderMap::new();
+    for field in bin_request.header().fields() {
+        info!("{}: {}", 
+            std::str::from_utf8(field.name()).unwrap(),
+            std::str::from_utf8(field.value()).unwrap());
+
+        headers.append(
+            HeaderName::from_bytes(field.name()).unwrap(),
+            HeaderValue::from_bytes(field.value()).unwrap(),
+        );
+    }
+
+    // Inject additional headers from the outer request
+    info!("Inner request injected headers");
+    for (key, value) in inject_headers {
+        if let Some(key) = key {
+            info!("{}: {}", key.as_str(), value.to_str().unwrap());
+            headers.append(key, value);
+        }
+    }
+
+    let mut t = target;
+    if let Some(path_bytes) = bin_request.control().path() {
+        if let Ok(path_str) = std::str::from_utf8(path_bytes) {
+            t.set_path(path_str);
+        }
+    }
+
+    let client = reqwest::ClientBuilder::new().build()?;
+    let response = client
+        .request(method, t)
+        .headers(headers)
+        .body(bin_request.content().to_vec())
+        .send()
+        .await?
+        .error_for_status()?;
+
+    Ok((response, server_response))
+}
+
+// Compute the set of headers that need to be injected into the inner request
+fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap {
+    let mut result = HeaderMap::new();
+    for key in keys {
+        if let Ok(header_name) = HeaderName::try_from(key) {
+            if let Some(value) = headers.get(&header_name) {
+                result.insert(header_name, value.clone());
+            }
+        }
+    }
+    result
+}
+
+#[allow(clippy::unused_async)]
+async fn score(
+    headers: warp::hyper::HeaderMap,
+    inject_request_headers: Vec<String>,
+    body: warp::hyper::body::Bytes,
+    ohttp: Arc<Mutex<OhttpServer>>,
+    target: Url,
+    mode: Mode,
+) -> Result<impl warp::Reply, std::convert::Infallible> {
+    info!("Received encapsulated score request for target {}", target);
+    info!("Request headers");
+    for (key, value) in &headers {
+        info!("{}: {}", key, value.to_str().unwrap());
+    }
+
+    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    let reply = generate_reply(
+        &ohttp, 
+        inject_headers,
+        &body[..], 
+        target, 
+        mode);
+
+    match reply.await {
+        Ok((response, server_response)) => {
+            let mut builder =
+                warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+            // Move headers from the inner response into the outer response
+            info!("Response headers:");
+            for (key, value) in response.headers() {
+                if !FILTERED_RESPONSE_HEADERS.iter().any(|h| h.eq_ignore_ascii_case(key.as_str())) {
+                    info!("{}: {}", key, std::str::from_utf8(value.as_bytes()).unwrap());
+                    builder = builder.header(key.as_str(), value.as_bytes());
+                }
+            }
+
+            let stream = Box::pin(unfold(response, |mut response| async move {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response))
+                    }
+                    _ => None,
+                }
+            }));
+
+            let stream = server_response.encapsulate_stream(stream);
+            Ok(builder.body(Body::wrap_stream(stream)))
+        }
+        Err(e) => {
+            error!("400 {}", e.to_string());
+            if let Ok(oe) = e.downcast::<::ohttp::Error>() {
+                Ok(warp::http::Response::builder()
+                    .status(422)
+                    .body(Body::from(format!("Error: {oe:?}"))))
+            } else {
+                Ok(warp::http::Response::builder()
+                    .status(400)
+                    .body(Body::from(&b"Request error"[..])))
+            }
+        }
+    }
+}
+
+#[allow(clippy::unused_async)]
+async fn discover(config: String) -> Result<impl warp::Reply, std::convert::Infallible> {
+    Ok(warp::http::Response::builder()
+        .status(200)
+        .body(Vec::from(config)))
+}
+
+fn with_ohttp(
+    ohttp: Arc<Mutex<OhttpServer>>,
+) -> impl Filter<Extract = (Arc<Mutex<OhttpServer>>,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || Arc::clone(&ohttp))
+}
+
 #[tokio::main]
 async fn main() -> Res<()> {
     let args = Args::parse();
@@ -329,10 +384,13 @@ async fn main() -> Res<()> {
 
     let mode = args.mode();
     let target = args.target;
+    let inject_request_headers = args.inject_request_headers;
 
     let score = warp::post()
         .and(warp::path::path("score"))
         .and(warp::path::end())
+        .and(warp::header::headers_cloned())
+        .and(warp::any().map(move || inject_request_headers.clone()))
         .and(warp::body::bytes())
         .and(with_ohttp(Arc::new(Mutex::new(ohttp))))
         .and(warp::any().map(move || target.clone()))
@@ -347,9 +405,7 @@ async fn main() -> Res<()> {
 
     let routes = score.or(discover);
 
-    warp::serve(routes)
-        .run(args.address)
-        .await;
+    warp::serve(routes).run(args.address).await;
 
     Ok(())
 }
