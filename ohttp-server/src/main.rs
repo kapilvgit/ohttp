@@ -86,7 +86,7 @@ impl Args {
     }
 }
 
-async fn import_config(kms: &str, maa: &str) -> Res<KeyConfig> {
+async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
     // Get MAA token from CVM guest attestation library
     let Some(tok) = attest("{}".as_bytes(), 0xffff, maa) else {
         panic!("Failed to get MAA token. You must be root to access TPM.")
