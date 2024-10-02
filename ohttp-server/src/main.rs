@@ -34,6 +34,7 @@ use serde::Deserialize;
 use hpke::Deserializable;
 
 const CHUNK_SIZE: usize = 16000;
+const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -68,6 +69,9 @@ struct Args {
     /// MAA endpoint
     #[structopt(long, short = "m", default_value = "https://sharedeus2.eus2.attest.azure.net")]
     maa: Url,
+
+    #[structopt(long, short = "i")]
+    inject_request_headers: Vec<String>,
 }
 
 impl Args {
@@ -82,6 +86,7 @@ impl Args {
 
 async fn generate_reply(
     ohttp_ref: &Arc<Mutex<OhttpServer>>,
+    inject_headers: HeaderMap,
     enc_request: &[u8],
     target: Url,
     _mode: Mode,
@@ -100,14 +105,24 @@ async fn generate_reply(
     for field in bin_request.header().fields() {
         headers.append(
             HeaderName::from_bytes(field.name()).unwrap(),
-            HeaderValue::from_bytes(field.value()).unwrap(),
+            HeaderValue::from_bytes(field.value()).unwrap()
         );
     }
 
+    println!("Headers in the request - ");
     for (name, value) in headers.iter() {
         // Note that HeaderName implements Debug but not Display, 
         // so we use {:?} for formatting
         println!("Header: {:?} = {:?}", name, value);
+    }
+
+    // Inject additional headers from the outer request
+    println!("Inner request injected headers");
+    for (key, value) in inject_headers {
+        if let Some(key) = key {
+            println!("{}: {}", key.as_str(), value.to_str().unwrap());
+            headers.append(key, value);
+        }
     }
 
     let mut t = target;
@@ -129,15 +144,57 @@ async fn generate_reply(
     Ok((response, server_response))
 }
 
+// Compute the set of headers that need to be injected into the inner request
+fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap {
+    let mut result = HeaderMap::new();
+    for key in keys {
+        if let Ok(header_name) = HeaderName::try_from(key) {
+            if let Some(value) = headers.get(&header_name) {
+                result.insert(header_name, value.clone());
+            }
+        }
+    }
+    result
+}
+
 #[allow(clippy::unused_async)]
 async fn score(
+    headers: warp::hyper::HeaderMap,
+    inject_request_headers: Vec<String>,
     body: warp::hyper::body::Bytes,
     ohttp: Arc<Mutex<OhttpServer>>,
     target: Url,
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
-    match generate_reply(&ohttp, &body[..], target, mode).await {
+    println!("Received encapsulated score request for target {}", target);
+    println!("Request headers");
+    for (key, value) in &headers {
+        println!("{}: {}", key, value.to_str().unwrap());
+    }
+
+    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    let reply = generate_reply(
+        &ohttp, 
+        inject_headers,
+        &body[..], 
+        target, 
+        mode);
+
+    match reply.await {
         Ok((response, mut server_response)) => {
+            
+            let mut builder =
+                warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+            // Move headers from the inner response into the outer response
+            println!("Response headers:");
+            for (key, value) in response.headers() {
+                if !FILTERED_RESPONSE_HEADERS.iter().any(|h| h.eq_ignore_ascii_case(key.as_str())) {
+                    println!("{}: {}", key, std::str::from_utf8(value.as_bytes()).unwrap());
+                    builder = builder.header(key.as_str(), value.as_bytes());
+                }
+            }
+
             let response_nonce = server_response.response_nonce();
             let nonce_stream = once(async { response_nonce });
 
@@ -185,9 +242,9 @@ async fn score(
             );
 
             let stream = nonce_stream.chain(chunk_stream);
-            Ok(warp::http::Response::builder()
-                .header("Content-Type", "message/ohttp-chunked-res")
-                .body(Body::wrap_stream(stream)))
+            
+
+            Ok(builder.body(Body::wrap_stream(stream)))
         }
         Err(e) => {
             println!("400 {}", e.to_string());
@@ -316,10 +373,13 @@ async fn main() -> Res<()> {
     
     let mode = args.mode();
     let target = args.target;
+    let inject_request_headers = args.inject_request_headers;
 
     let score = warp::post()
         .and(warp::path::path("score"))
         .and(warp::path::end())
+        .and(warp::header::headers_cloned())
+        .and(warp::any().map(move || inject_request_headers.clone()))
         .and(warp::body::bytes())
         .and(with_ohttp(Arc::new(Mutex::new(ohttp))))
         .and(warp::any().map(move || target.clone()))
