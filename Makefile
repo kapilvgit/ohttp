@@ -31,7 +31,7 @@ run-server-container:
 	docker compose -f ./docker/docker-compose-server.yml up
 
 run-server-container-attest: 
-	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA_URL} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
 
 run-whisper:
 	docker run --network=host whisper-api 
