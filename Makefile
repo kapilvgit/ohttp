@@ -31,7 +31,7 @@ run-server-container:
 	docker compose -f ./docker/docker-compose-server.yml up
 
 run-server-container-attest: 
-	docker run --privileged -e TARGET=${TARGET} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA_URL} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
 
 run-whisper:
 	docker run --network=host whisper-api 
@@ -51,8 +51,8 @@ service-cert:
 verify-quote:
 	verify_quote.sh ${KMS} --cacert service_cert.pem
 	
-run-client-kms: service-cert verify-quote
-	cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+run-client-kms: service-cert 
+	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem 
 

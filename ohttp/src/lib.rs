@@ -474,6 +474,7 @@ impl ClientResponse {
                 if enc_response.is_empty() { return };
                 info!("Decrypting chunk: {}({})", hex::encode(&enc_response), enc_response.len());
                 let (len, bytes_read) = self.variant_decode(&enc_response).unwrap();
+                info!("Chunk length: {}, bytes read {}", len, bytes_read);
                 if len != 0 {
                     let aad = "";
                     let (_, ct) = enc_response.split_at(bytes_read);
@@ -489,9 +490,17 @@ impl ClientResponse {
                     let (_, rest) = enc_response.split_at(bytes_read);
                     let (_, bytes_read) = self.variant_decode(&rest).unwrap();
                     let (_, ct) = rest.split_at(bytes_read);
+                    // Read to the end
+                    let mut current = ct.to_vec();
+                    while let Some(next) = stream.next().await {
+                        enc_response = next.unwrap();
+                        info!("Appending chunk: {}({})", hex::encode(&enc_response), enc_response.len());
+                        current.append(&mut enc_response);
+                    }
                     let aad = "final";
                     self.seq += 1;
-                    yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, ct);
+                    yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, &current);
+                    return;
                 }
             }
         };

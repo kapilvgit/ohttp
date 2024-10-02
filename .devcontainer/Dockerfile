@@ -1,4 +1,4 @@
-FROM ghcr.io/microsoft/ccf/app/run/sgx:ccf-5.0.0
+FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -yq \
 ca-certificates coreutils curl git make mercurial \

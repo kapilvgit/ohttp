@@ -35,7 +35,7 @@ fi
 
 if [[ -n ${MAA_URL} ]]; then 
   if is_valid_url $MAA_URL; then 
-    CMD="$CMD --maa_url ${MAA_URL}"
+    CMD="$CMD --maa-url ${MAA_URL}"
   else 
     echo "MAA_URL is not a valid URL"
     exit 1
@@ -44,7 +44,7 @@ fi
 
 if [[ -n ${KMS_URL} ]]; then 
   if is_valid_url $KMS_URL; then 
-    CMD="$CMD --kms_url ${KMS_URL}"
+    CMD="$CMD --kms-url ${KMS_URL}"
   else 
     echo "KMS_URL is not a valid URL"
     exit 1
