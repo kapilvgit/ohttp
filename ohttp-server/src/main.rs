@@ -1,21 +1,47 @@
 #![deny(clippy::pedantic)]
 
-use std::{
-    io::Cursor, net::SocketAddr, path::{PathBuf}, sync::Arc
-};
+use std::{io::Cursor, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use reqwest::{header::{HeaderMap, HeaderName, HeaderValue}, Url, Method};
+use futures::StreamExt;
+use futures_util::stream::{once, unfold};
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Method, Response, Url,
+};
 use tokio::sync::Mutex;
 
 use bhttp::{Message, Mode, StatusCode};
 use ohttp::{
     hpke::{Aead, Kdf, Kem},
-    KeyConfig, Server as OhttpServer, SymmetricSuite,
+    KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
 };
 use structopt::StructOpt;
+use warp::hyper::Body;
 use warp::Filter;
 
+use tokio::time::sleep;
+use tokio::time::Duration;
+
+use reqwest::Client;
+use cgpuvm_attest::attest;
+
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
+
+use serde_json::from_str;
+use serde_cbor::Value;
+
+use serde::Deserialize;
+use hpke::Deserializable;
+
+const CHUNK_SIZE: usize = 16000;
+const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
+
+#[derive(Deserialize)]
+struct ExportedKey {
+    kid: u8,
+    key: String,
+    receipt: String
+}
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
@@ -36,9 +62,16 @@ struct Args {
     #[structopt(long, short = "k", default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/server.key"))]
     key: PathBuf,
 
-    /// Target server 
-    #[structopt(long, short = "t", default_value = "http://127.0.0.1:5678")]
+    /// Target server
+    #[structopt(long, short = "t", default_value = "http://127.0.0.1:8000")]
     target: Url,
+
+    /// MAA endpoint
+    #[structopt(long, short = "m", default_value = "https://sharedeus2.eus2.attest.azure.net")]
+    maa: Url,
+
+    #[structopt(long, short = "i")]
+    inject_request_headers: Vec<String>,
 }
 
 impl Args {
@@ -53,10 +86,11 @@ impl Args {
 
 async fn generate_reply(
     ohttp_ref: &Arc<Mutex<OhttpServer>>,
+    inject_headers: HeaderMap,
     enc_request: &[u8],
     target: Url,
-    mode: Mode,
-) -> Res<Vec<u8>> {
+    _mode: Mode,
+) -> Res<(Response, ServerResponse)> {
     let ohttp = ohttp_ref.lock().await;
     let (request, server_response) = ohttp.decapsulate(enc_request)?;
     let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
@@ -70,8 +104,25 @@ async fn generate_reply(
     let mut headers = HeaderMap::new();
     for field in bin_request.header().fields() {
         headers.append(
-            HeaderName::from_bytes(field.name()).unwrap(), 
-            HeaderValue::from_bytes(field.value()).unwrap());
+            HeaderName::from_bytes(field.name()).unwrap(),
+            HeaderValue::from_bytes(field.value()).unwrap()
+        );
+    }
+
+    println!("Headers in the request - ");
+    for (name, value) in headers.iter() {
+        // Note that HeaderName implements Debug but not Display, 
+        // so we use {:?} for formatting
+        println!("Header: {:?} = {:?}", name, value);
+    }
+
+    // Inject additional headers from the outer request
+    println!("Inner request injected headers");
+    for (key, value) in inject_headers {
+        if let Some(key) = key {
+            println!("{}: {}", key.as_str(), value.to_str().unwrap());
+            headers.append(key, value);
+        }
     }
 
     let mut t = target;
@@ -88,49 +139,130 @@ async fn generate_reply(
         .body(bin_request.content().to_vec())
         .send()
         .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+        .error_for_status()?;
 
-    let mut bin_response = Message::response(StatusCode::OK);
-    bin_response.write_content(response);
+    Ok((response, server_response))
+}
 
-    let mut response = Vec::new();
-    bin_response.write_bhttp(mode, &mut response)?;
-    let enc_response = server_response.encapsulate(&response)?;
-    Ok(enc_response)
+// Compute the set of headers that need to be injected into the inner request
+fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap {
+    let mut result = HeaderMap::new();
+    for key in keys {
+        if let Ok(header_name) = HeaderName::try_from(key) {
+            if let Some(value) = headers.get(&header_name) {
+                result.insert(header_name, value.clone());
+            }
+        }
+    }
+    result
 }
 
 #[allow(clippy::unused_async)]
 async fn score(
+    headers: warp::hyper::HeaderMap,
+    inject_request_headers: Vec<String>,
     body: warp::hyper::body::Bytes,
     ohttp: Arc<Mutex<OhttpServer>>,
     target: Url,
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
-    match generate_reply(&ohttp, &body[..], target, mode).await {
-        Ok(resp) => Ok(warp::http::Response::builder()
-            .header("Content-Type", "message/ohttp-res")
-            .body(resp)),
+    println!("Received encapsulated score request for target {}", target);
+    println!("Request headers");
+    for (key, value) in &headers {
+        println!("{}: {}", key, value.to_str().unwrap());
+    }
+
+    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    let reply = generate_reply(
+        &ohttp, 
+        inject_headers,
+        &body[..], 
+        target, 
+        mode);
+
+    match reply.await {
+        Ok((response, mut server_response)) => {
+            
+            let mut builder =
+                warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+            // Move headers from the inner response into the outer response
+            println!("Response headers:");
+            for (key, value) in response.headers() {
+                if !FILTERED_RESPONSE_HEADERS.iter().any(|h| h.eq_ignore_ascii_case(key.as_str())) {
+                    println!("{}: {}", key, std::str::from_utf8(value.as_bytes()).unwrap());
+                    builder = builder.header(key.as_str(), value.as_bytes());
+                }
+            }
+
+            let response_nonce = server_response.response_nonce();
+            let nonce_stream = once(async { response_nonce });
+
+            let chunk_stream = unfold((true, None, response, server_response, mode), 
+                |(first, mut chunk, mut response, mut server_response, mode)| async move {
+
+                    if first {chunk = response.chunk().await.unwrap();}
+                    let Some(mut chunk) = chunk else { return None };
+
+                    println!("Processing chunk {} {}",first,std::str::from_utf8(&chunk).unwrap());
+                
+                    while !chunk.is_empty() {
+                        // Determine the size of the next chunk part
+                        let size = std::cmp::min(CHUNK_SIZE, chunk.len());
+                        // Split the chunk into a part to process and the remainder
+                        let (chunk_part, remaining_chunk) = chunk.split_at(size);
+
+                        let mut bin_response = Message::response(StatusCode::OK);
+                        bin_response.write_content(chunk_part);
+                        let mut chunked_response = Vec::new();
+                        bin_response.write_bhttp(mode, &mut chunked_response).unwrap();
+
+                        let (next_chunk, last_major, err) = match response.chunk().await {
+                            Ok(Some(c)) => (Some(c), false, None),
+                            Ok(None) => (None, true, None),
+                            Err(_) => (None, true, Some(ohttp::Error::Truncated))
+                        };
+
+                        if let Some(_) = err { return None };
+                        let mut last = false;
+
+                        // If there's remaining data, continue with it; otherwise, proceed to the next chunk
+                        if !remaining_chunk.is_empty() {
+                            chunk = remaining_chunk.to_vec().into();
+                        } else {
+                            chunk = next_chunk.unwrap_or_default();
+                            if last_major {last = true;}
+                        }
+
+                        let enc_response = server_response.encapsulate_chunk(&chunked_response, last).unwrap();
+                        return Some((Ok::<Vec<u8>, ohttp::Error>(enc_response), (false, Some(chunk), response, server_response, mode)));
+                    }
+                None
+            }
+            );
+
+            let stream = nonce_stream.chain(chunk_stream);
+            
+
+            Ok(builder.body(Body::wrap_stream(stream)))
+        }
         Err(e) => {
             println!("400 {}", e.to_string());
             if let Ok(oe) = e.downcast::<::ohttp::Error>() {
                 Ok(warp::http::Response::builder()
                     .status(422)
-                    .body(Vec::from(format!("Error: {oe:?}").as_bytes())))
+                    .body(Body::from(format!("Error: {oe:?}"))))
             } else {
                 Ok(warp::http::Response::builder()
                     .status(400)
-                    .body(Vec::from(&b"Request error"[..])))
+                    .body(Body::from(&b"Request error"[..])))
             }
         }
     }
 }
 
 #[allow(clippy::unused_async)]
-async fn discover(
-    config: String,
-) -> Result<impl warp::Reply, std::convert::Infallible> {
+async fn discover(config: String, token: String) -> Result<impl warp::Reply, std::convert::Infallible> {
     Ok(warp::http::Response::builder()
         .status(200)
         .body(Vec::from(config)))
@@ -147,25 +279,107 @@ async fn main() -> Res<()> {
     let args = Args::from_args();
     ::ohttp::init();
     env_logger::try_init().unwrap();
+    let maa = args.maa.clone();
 
-    let config = KeyConfig::new(
-        0,
-        Kem::X25519Sha256,
+    // Get MAA token from CVM guest attestation library
+    let Some(tok) = attest("{}".as_bytes(), 0xffff, maa.as_str()) else {panic!("Failed to get MAA token. You must be root to access TPM.")};
+    let token = String::from_utf8(tok).unwrap();
+    println!("Fetched MAA token: {}", token);
+
+    let client = Client::builder().danger_accept_invalid_certs(true).build()?;
+
+    // Retrying logic for receipt
+    let max_retries = 3;
+    let mut retries = 0;
+    let key : String;
+    let mut kid : u8 = 0;
+
+    loop {
+        // Get HPKE private key from Azure KMS
+        let response = client.post("https://acceu-aml-504.confidential-ledger.azure.com/key")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        // We may have to wait for receipt to be ready
+        if response.status() == 202 {
+            if retries < max_retries {
+                retries += 1;
+                println!("Received 202 status code, retrying... (attempt {}/{})", retries, max_retries);
+                sleep(Duration::from_secs(1)).await;
+            } else {
+                panic!("Max retries reached, giving up. Cannot reach key management service");
+            }
+        } else {
+            let skr_body = response.text().await?;
+            let skr : ExportedKey = from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
+
+            println!("SKR successful, KID={}, Receipt={}, Key={}", skr.kid, skr.receipt, skr.key);
+            key = skr.key;
+            break;
+        }
+    }
+    let cwk = hex::decode(&key).expect("Failed to decode hex key");
+    let cwk_map : Value = serde_cbor::from_slice(&cwk).expect("Invalid CBOR in key from KMS");
+    let mut d = None;
+
+    // Parse the returned CBOR key (in CWK-like format)
+    if let Value::Map(map) = cwk_map {
+        for (key, value) in map {
+            if let Value::Integer(key) = key {
+                match key {
+                    // key identifier
+                    4 => if let Value::Integer(k) = value {
+                        kid = k as u8
+                    } else { panic!("Bad KID"); },
+
+                    // private exponent
+                    -4 => if let Value::Bytes(vec) = value {
+                          d = Some(vec)
+                        } else { panic!("Invalid private key"); },
+
+                    // key type, must be P-384(2)
+                    -1 => if value == Value::Integer(2) {} else {panic!("Bad CBOR key type, expected P-384(2)");},
+
+                    // Ignore public key (x,y) as we recompute it from d anyway
+                    -2 | -3 => (),
+
+                    _ => panic!("Unexpected field in exported private key from KMS")
+                };
+            };
+        }
+    } else { panic!("Incorrect CBOR encoding in returned private key"); };
+
+    let (sk, pk) = if let Some(key) = d {
+        let s = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::PrivateKey::from_bytes(&key).expect("Failed to create HPKE private key");
+        let p = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&s);
+        (s,p)
+    } else { panic!("Missing private exponent in key returned from KMS"); };
+
+    let config = KeyConfig::import_p384(
+        kid,
+        Kem::P384Sha384,
+        sk, pk,
         vec![
+            SymmetricSuite::new(Kdf::HkdfSha384, Aead::Aes256Gcm),
             SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
             SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
         ],
     )?;
+
     let ohttp = OhttpServer::new(config)?;
     let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()])?);
-
     println!("Config: {}", config);
+    
     let mode = args.mode();
     let target = args.target;
+    let inject_request_headers = args.inject_request_headers;
 
     let score = warp::post()
         .and(warp::path::path("score"))
         .and(warp::path::end())
+        .and(warp::header::headers_cloned())
+        .and(warp::any().map(move || inject_request_headers.clone()))
         .and(warp::body::bytes())
         .and(with_ohttp(Arc::new(Mutex::new(ohttp))))
         .and(warp::any().map(move || target.clone()))
@@ -176,14 +390,12 @@ async fn main() -> Res<()> {
         .and(warp::path("discover"))
         .and(warp::path::end())
         .and(warp::any().map(move || config.clone()))
+        .and(warp::any().map(move || token.clone()))
         .and_then(discover);
 
     let routes = score.or(discover);
 
     warp::serve(routes)
-        .tls()
-        .cert_path(args.certificate)
-        .key_path(args.key)
         .run(args.address)
         .await;
 

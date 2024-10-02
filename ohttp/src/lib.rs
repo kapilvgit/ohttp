@@ -1,4 +1,4 @@
-#![deny(warnings, clippy::pedantic)]
+#![deny(clippy::pedantic)]
 #![allow(clippy::missing_errors_doc)] // I'm too lazy
 #![cfg_attr(
     not(all(feature = "client", feature = "server")),
@@ -51,6 +51,9 @@ use crate::rh::{
     hpke::{Config as HpkeConfig, Exporter, HpkeR, HpkeS},
 };
 
+use serde::Deserialize;
+use colored::*;
+
 /// The request header is a `KeyId` and 2 each for KEM, KDF, and AEAD identifiers
 const REQUEST_HEADER_LEN: usize = size_of::<KeyId>() + 6;
 const INFO_REQUEST: &[u8] = b"message/bhttp request";
@@ -89,6 +92,13 @@ pub struct ClientRequest {
     header: Vec<u8>,
 }
 
+#[derive(Deserialize)]
+struct KmsKeyConfiguration{
+    #[serde(rename = "publicKey")]
+    key_config: String,
+    receipt: String
+}
+
 #[cfg(feature = "client")]
 impl ClientRequest {
     /// Construct a `ClientRequest` from a specific `KeyConfig` instance.
@@ -124,6 +134,30 @@ impl ClientRequest {
         }
     }
 
+    /// Reads a json containing key configurations with receipts and constructs a single use client sender
+    /// from the first supported configuration.
+    /// See `KeyConfig::decode_list` for the structure details.
+    pub fn from_kms_config(config: &str, cert: &str) -> Res<Self> {
+        let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config).unwrap();
+        if let Some(kms_config) = kms_configs.pop() {
+
+            println!("{}", "Establishing trust in key management service...".red());
+            
+            let _ = verifier::verify(&kms_config.receipt, &cert)?;
+            
+            println!("{}", "The receipt for the generation of the OHTTP key is valid.".green());
+            
+            let encoded_key = hex::decode(&kms_config.key_config).unwrap();
+            let mut config = KeyConfig::decode(&encoded_key)?;
+            
+            println!("\n{} {}\n", "Loaded OHTTP public key configuration: ".green(), &kms_config.key_config);
+            
+            Self::from_config(&mut config)
+        } else {
+            Err(Error::Unsupported)
+        }
+    }
+   
     /// Encapsulate a request.  This consumes this object.
     /// This produces a response handler and the bytes of an encapsulated request.
     pub fn encapsulate(mut self, request: &[u8]) -> Res<(Vec<u8>, ClientResponse)> {
@@ -259,10 +293,42 @@ impl ServerResponse {
         })
     }
 
+    // Variable length encoding of an integer
+    fn variant_encode(&mut self, mut val: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        loop {
+            let mut byte = (val & 0x7F) as u8; // Take the last 7 bits
+            val >>= 7; // Shift right by 7 bits
+            if val != 0 {
+                byte |= 0x80; // Set the MSB if there's more to encode
+            }
+            bytes.push(byte);
+            if val == 0 {
+                break;
+            }
+        }
+        bytes
+    }
+
     /// Consume this object by encapsulating a response.
     pub fn encapsulate(mut self, response: &[u8]) -> Res<Vec<u8>> {
         let mut enc_response = self.response_nonce;
         let mut ct = self.aead.seal(&[], response)?;
+        enc_response.append(&mut ct);
+        Ok(enc_response)
+    }
+
+    pub fn response_nonce(&mut self) -> Res<Vec<u8>> {
+        return Ok(self.response_nonce.clone());
+    }
+
+    /// Encapsulating a chunk in the response.
+    pub fn encapsulate_chunk(&mut self, chunk: &[u8], last: bool) -> Res<Vec<u8>> {
+        let mut enc_response = Vec::new();
+        let aad = if last { "final" } else { "" };
+        let mut ct = self.aead.seal(aad.as_bytes(), chunk)?;
+        let mut enc_length = self.variant_encode(if last { 0 } else { ct.len() });
+        enc_response.append(&mut enc_length);
         enc_response.append(&mut ct);
         Ok(enc_response)
     }
@@ -281,6 +347,8 @@ impl std::fmt::Debug for ServerResponse {
 pub struct ClientResponse {
     hpke: HpkeS,
     enc: Vec<u8>,
+    seq: u64,
+    aead: Option<Aead>,
 }
 
 #[cfg(feature = "client")]
@@ -289,7 +357,14 @@ impl ClientResponse {
     /// Doesn't do anything because we don't have the nonce yet, so
     /// the work that can be done is limited.
     fn new(hpke: HpkeS, enc: Vec<u8>) -> Self {
-        Self { hpke, enc }
+        let seq = 0;
+        let aead = None;
+        Self {
+            hpke,
+            enc,
+            seq,
+            aead,
+        }
     }
 
     /// Consume this object by decapsulating a response.
@@ -307,6 +382,58 @@ impl ClientResponse {
             response_nonce,
         )?;
         aead.open(&[], 0, ct) // 0 is the sequence number
+    }
+
+    pub fn set_response_nonce(&mut self, enc_response: &[u8]) -> Res<()> {
+        let mid = entropy(self.hpke.config());
+        if mid != enc_response.len() {
+            return Err(Error::Truncated);
+        }
+        let aead = make_aead(
+            Mode::Decrypt,
+            self.hpke.config(),
+            &self.hpke,
+            self.enc.clone(),
+            enc_response,
+        )?;
+        self.aead = Some(aead);
+        Ok(())
+    }
+
+    fn variant_decode(&mut self, bytes: &[u8]) -> Result<(u64, usize), String> {
+        let mut value: u64 = 0;
+        let mut shift = 0;
+        let mut bytes_read = 0;
+
+        for &byte in bytes {
+            let byte_value = (byte & 0x7F) as u64;
+            value |= byte_value << shift;
+            bytes_read += 1;
+            if byte & 0x80 == 0 {
+                // Continuation bit is not set, end of the VLQ-encoded integer
+                return Ok((value, bytes_read));
+            }
+            shift += 7;
+            if shift >= 64 {
+                return Err("VLQ-encoded integer is too large".to_string());
+            }
+        }
+        Err("Incomplete VLQ-encoded integer".to_string())
+    }
+
+    /// Decapsulate a response.
+    pub fn decapsulate_chunk(&mut self, enc_response: &[u8]) -> (Res<Vec<u8>>, bool) {
+        let (len, bytes_read) = self.variant_decode(enc_response).unwrap();
+        let (_, ct) = enc_response.split_at(bytes_read);
+        let aad = if len == 0 { "final" } else { "" };
+        self.seq += 1;
+        (
+            self.aead
+                .as_mut()
+                .unwrap()
+                .open(aad.as_bytes(), self.seq - 1, ct),
+            len == 0,
+        )
     }
 }
 
