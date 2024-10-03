@@ -7,7 +7,7 @@ use std::{
 };
 use std::io::Cursor;
 use clap::Parser;
-use reqwest::Client;
+use reqwest::{Client, header::AUTHORIZATION};
 use futures_util::stream::unfold;
 use futures_util::StreamExt;
 use log::info;
@@ -81,6 +81,10 @@ struct Args {
     /// List of headers in the outer request
     #[arg(long, short = 'O')]
     outer_headers: Option<Vec<String>>,
+
+    /// List of headers in the outer request
+    #[arg(long, short = 'T')]
+    token: Option<String>,
 }
 
 // Create a multi-part request from a file
@@ -94,6 +98,7 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
     if let Some(headers) = headers {
         for header in headers {
             write!(&mut request, "{}\r\n", header)?;
+            info!("{}\r\n", header);
         }
     }
 
@@ -126,7 +131,7 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
             write!(&mut body, "\r\n--{}--\r\n", boundary)?;
         }
     }
-    
+
     write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
     write!(&mut request, "Content-Length: {}\r\n", body.len())?;
     write!(&mut request, "\r\n")?;
@@ -214,24 +219,40 @@ async fn main() -> Res<()> {
 
     let client = reqwest::ClientBuilder::new().build()?;
 
+    let tokenstr = args.token.as_ref().map_or("None", |s| s.as_str());
+
     let mut builder = client
         .post(&args.url)
-        .header("content-type", "message/ohttp-chunked-req");
+        .header("content-type", "message/ohttp-chunked-req")
+        .header(AUTHORIZATION, format!("Bearer {}", tokenstr));
 
     // Add outer headers
+    info!("Outer request headers:");
     let outer_headers = args.outer_headers.clone();
     if let Some(headers) =  outer_headers {
         for header in headers {
             let mut parts = header.splitn(2, ':');
-            builder = builder.header(parts.next().unwrap(), parts.next().unwrap());
+            let part1 = parts.next().unwrap();
+            let part2 = parts.next().unwrap();
+
+            info!("Adding {}: {}", part1, part2);
+             
+            builder = builder.header(part1, part2);
+            
         }
     }
-    
+
     let response = builder
         .body(enc_request)
         .send()
         .await?
         .error_for_status()?;
+
+    info!("response status: {}\n", response.status());
+    info!("Response headers:");
+    for (key, value) in response.headers() {        
+        info!("{}: {}", key, std::str::from_utf8(value.as_bytes()).unwrap());
+    }
 
     let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
         Box::new(File::open(outfile)?)

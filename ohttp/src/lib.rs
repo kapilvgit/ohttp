@@ -420,6 +420,7 @@ impl ClientResponse {
     fn set_response_nonce(&mut self, enc_response: &[u8]) -> Res<()> {
         let mid = entropy(self.hpke.config());
         if mid != enc_response.len() {
+            info!("set_response_nonce failing from here");
             return Err(Error::Truncated);
         }
         let aead = make_aead(

@@ -50,7 +50,7 @@ const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 struct Args {
     /// The address to bind to.
     // #[arg(default_value = "127.0.0.1:9443")]
-    #[arg(default_value = "0.0.0.0:9443")]
+    #[arg(default_value = "127.0.0.1:9443")]
     address: SocketAddr,
 
     /// When creating message/bhttp, use the indeterminate-length form.
