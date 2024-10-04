@@ -60,3 +60,15 @@ run-client-local:
 	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   -H "api-key: test123" --config `curl -s http://localhost:9443/discover` 
+
+run-client-kms-whisper-local: service-cert 
+	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
+  --kms-cert ./service_cert.pem \
+  -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:arthig-deploy16'
+
+run-client-kms-whisper: service-cert 
+	RUST_LOG=info cargo run --bin ohttp-client -- 'https://arthig-ep.eastus2.inference.ml.azure.com/score'\
+  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
+  --kms-cert ./service_cert.pem \
+  -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:arthig-deploy16' -T ${TOKEN}
