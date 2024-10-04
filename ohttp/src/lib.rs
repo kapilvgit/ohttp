@@ -339,7 +339,7 @@ impl ServerResponse {
                     // AEAD-Protected Chunk (..),
                     enc_response.append(&mut ct);
 
-                    info!("Encapsulated chunk {}({})", hex::encode(&enc_response), enc_response.len());
+                    info!("Encapsulated chunk {}({},{})", hex::encode(&enc_response), ct.len(), enc_response.len());
                     yield Ok(enc_response);
                     current = next.unwrap();
                 } else {
@@ -355,7 +355,7 @@ impl ServerResponse {
                     let mut enc_length = self.variant_encode(ct.len());
                     enc_response.append(&mut enc_length);
                     enc_response.append(&mut ct);
-                    info!("Encapsulated final chunk {}({})", hex::encode(&enc_response), enc_response.len());
+                    info!("Encapsulated final chunk {}({},{})", hex::encode(&enc_response), ct.len(), enc_response.len());
                     yield Ok(enc_response);
                     return;
                 }
