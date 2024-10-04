@@ -250,6 +250,7 @@ async fn main() -> Res<()> {
     while let Some(result) = stream.next().await {
         match result {
             Ok(chunk) => {
+                output.write("\n".as_bytes())?;
                 output.write_all(&chunk)?;
             }
             Err(e) => {
