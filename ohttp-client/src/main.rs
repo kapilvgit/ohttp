@@ -234,9 +234,7 @@ async fn main() -> Res<()> {
             let mut parts = header.splitn(2, ':');
             let part1 = parts.next().unwrap();
             let part2 = parts.next().unwrap();
-
             info!("Adding {}: {}", part1, part2);
-             
             builder = builder.header(part1, part2);
             
         }
