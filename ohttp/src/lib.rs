@@ -531,7 +531,6 @@ mod test {
     use std::{fmt::Debug, io::ErrorKind};
 
     use async_stream::stream;
-
     const KEY_ID: KeyId = 1;
     const KEM: Kem = Kem::X25519Sha256;
     const SYMMETRIC: &[SymmetricSuite] = &[
