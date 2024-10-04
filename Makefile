@@ -1,8 +1,25 @@
 KMS ?= https://acceu-aml-504.confidential-ledger.azure.com
 MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
-TARGET ?= http://127.0.0.1:5001
-# TARGET_PATH ?= '/v1/audio/transcriptions'
-TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
+
+# MODEL can be whisper_opensource, whisper_aoai or whisper_aoai_local
+MODEL ?= whisper_opensource
+ifeq ($(MODEL), whisper_opensource)
+	TARGET ?= http://127.0.0.1:3000
+	TARGET_PATH ?= '/v1/audio/transcriptions'
+	SCORING_ENDPOINT ?= 'http://localhost:9443/score'
+else ifeq ($(MODEL), whisper_aoai_local)
+	TARGET ?= http://127.0.0.1:5001
+	TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
+	SCORING_ENDPOINT ?= 'http://localhost:9443/score'
+else ifeq ($(MODEL), whisper_aoai)
+	TARGET ?= http://127.0.0.1:5002
+	TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
+	DEPLOYMENT ?= 'arthig-deploy16'
+	SCORING_ENDPOINT ?= 'https://arthig-ep.eastus2.inference.ml.azure.com/score'
+else
+	echo "Unknown model"
+endif
+	
 INPUT ?= ./examples/audio.mp3
 
 build-whisper:
@@ -20,7 +37,7 @@ build-streaming:
 build: build-server build-client build-streaming build-whisper
 
 run-server:
-	cargo run --bin ohttp-server -- --target ${TARGET} 
+	cargo run --bin ohttp-server -- --target ${TARGET}
 
 run-server-attest:
 	cargo run --bin ohttp-server -- --certificate ./ohttp-server/server.crt \
@@ -52,23 +69,23 @@ verify-quote:
 	verify_quote.sh ${KMS} --cacert service_cert.pem
 	
 run-client-kms: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem 
 
 run-client-local:
-	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   -H "api-key: test123" --config `curl -s http://localhost:9443/discover` 
 
-run-client-kms-whisper-local: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
+run-client-kms-aoai-local: service-cert 
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  --kms-cert ./service_cert.pem \
-  -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:arthig-deploy16'
+  --kms-cert ./service_cert.pem 
+  -H 'openai-internal-enableasrsupport:true'
 
-run-client-kms-whisper: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- 'https://arthig-ep.eastus2.inference.ml.azure.com/score'\
+run-client-kms-aoai: service-cert 
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem \
-  -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:arthig-deploy16' -T ${TOKEN}
+  -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
