@@ -60,3 +60,8 @@ run-client-local:
 	RUST_LOG=info cargo run --bin ohttp-client -- 'http://localhost:9443/score'\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   -H "api-key: test123" --config `curl -s http://localhost:9443/discover` 
+
+run-client-container:
+	docker run --privileged --net=host -e TARGET=${TARGET} \
+	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
+	-e INPUT=${INPUT} ohttp-client
