@@ -481,7 +481,7 @@ impl ClientResponse {
                 }
 
                 while nonce_received && !buffer.is_empty() {
-                    let (mut len, bytes_read) = self.variant_decode(&buffer).unwrap();
+                    let (mut len, mut bytes_read) = self.variant_decode(&buffer).unwrap();
                     info!("Buffer state: {}, {}({})", buffer.len(), len, bytes_read);
 
                     // Final Response Chunk Indicator (i) = 0,
@@ -489,9 +489,10 @@ impl ClientResponse {
                         buffer.drain(0..bytes_read);
                         info!("Processing final chunk");
                         aad = "final";
-                        let (length, bytes_read) = self.variant_decode(&buffer).unwrap();
+                        let (length, bytes) = self.variant_decode(&buffer).unwrap();
                         info!("Buffer state: {}({})", length, bytes_read);
                         len = length;
+                        bytes_read = bytes;
                     }
 
                     // Decapsulate chunk if received
