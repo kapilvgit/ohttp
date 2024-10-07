@@ -89,3 +89,8 @@ run-client-kms-aoai: service-cert
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem \
   -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
+
+run-client-container:
+	docker run --privileged --net=host -e TARGET=${TARGET} \
+	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
+	-e INPUT=${INPUT} ohttp-client
