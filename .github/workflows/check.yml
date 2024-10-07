@@ -9,8 +9,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-permissions:
-  contents: write
   
 jobs:
   check:
@@ -72,7 +70,7 @@ jobs:
 
       - name: Build
         run: |
-          ln -s ${{ github.workspace }}/ohttp-server/libazguestattestation.so.1.0.5 /usr/lib/libazguestattestation.so
+          sudo ln -s ${{ github.workspace }}/ohttp-server/libazguestattestation.so.1.0.5 /usr/lib/libazguestattestation.so
           cargo +${{ matrix.rust }} build --tests --no-default-features --features ${{ matrix.hpke }},client,server
 
       - name: Run Tests
