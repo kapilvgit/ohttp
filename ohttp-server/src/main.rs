@@ -93,7 +93,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
         panic!("Failed to get MAA token. You must be root to access TPM.")
     };
     let token = String::from_utf8(tok).unwrap();
-    info!("Fetched MAA token: {}", token);
+    info!("Fetched MAA token: {token}");
 
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
@@ -109,7 +109,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
         // Get HPKE private key from Azure KMS
         let response = client
             .post(kms)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
 
@@ -150,8 +150,8 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                 match key {
                     // key identifier
                     4 => {
-                        if let Value::Integer(k) = value {
-                            kid = k as u8
+                        if let Value::Integer(k) = value {                            
+                            kid = u8::try_from(k).unwrap();
                         } else {
                             panic!("Bad KID");
                         }
@@ -160,7 +160,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                     // private exponent
                     -4 => {
                         if let Value::Bytes(vec) = value {
-                            d = Some(vec)
+                            d = Some(vec);
                         } else {
                             panic!("Invalid private key");
                         }

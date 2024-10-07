@@ -5,7 +5,6 @@ use serde::Deserialize;
 use base64::{self, Engine};
 use openssl::x509::X509;
 use openssl::hash::{MessageDigest, Hasher};
-use hex;
 mod err;
 pub use crate::err::Error;
 pub use crate::err::Res;
@@ -107,7 +106,7 @@ fn check_signature(signing_cert: &str, signature: &str, root: &[u8]) -> Res<bool
     let ecdsa_sig = EcdsaSig::from_der(&sig)?;
 
     // Verify signature over root
-    let is_valid = ecdsa_sig.verify(&root, &public_key)?;
+    let is_valid = ecdsa_sig.verify(root, &public_key)?;
 
     info!("  {}", "Receipt signature valid.".green());
     Ok(is_valid)
@@ -141,7 +140,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = verify(&"", &"").unwrap();
-        assert_eq!(result, true);
+        let result = verify("", "").unwrap();
+        assert!(result);
     }
 }

@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic)]
 #![allow(clippy::missing_errors_doc)] // I'm too lazy
 #![cfg_attr(
     not(all(feature = "client", feature = "server")),
@@ -267,6 +266,7 @@ impl ServerResponse {
     fn variant_encode(&mut self, mut val: usize) -> Vec<u8> {
         let mut bytes = Vec::new();
         loop {
+            #[allow(clippy::cast_possible_truncation)]
             let mut byte = (val & 0x7F) as u8; // Take the last 7 bits
             val >>= 7; // Shift right by 7 bits
             if val != 0 {
@@ -315,7 +315,7 @@ impl ServerResponse {
     {
         // Response Nonce (Nk)
         let response_nonce = Ok(self.response_nonce.clone());
-        info!("Response nonce {}", hex::encode(&self.response_nonce.clone()));
+        info!("Response nonce {}", hex::encode(self.response_nonce.clone()));
         let nonce_stream = once(async { response_nonce });
 
         let mut input = Box::pin(input);
@@ -496,15 +496,16 @@ impl ClientResponse {
                     }
 
                     // Decapsulate chunk if received
-                    if buffer.len() >= (len as usize){
+                    let len = usize::try_from(len).unwrap();
+                    if buffer.len() >= len {
                         buffer.drain(0..bytes_read);
-                        let ct: Vec<_> = buffer.drain(0..(len as usize)).collect();
+                        let ct: Vec<_> = buffer.drain(0..len).collect();
                         info!("Decapsulating chunk {}({})", hex::encode(&ct), len);
                         self.seq += 1;
                         yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, &ct);
                     } else {
                         break;
-                    }    
+                    }
                 }
             }
         };
@@ -823,7 +824,7 @@ mod test {
 
         let mut count = 0;
         while let Some(next) = response.next().await {
-            count = count + 1;
+            count += 1;
             assert!(next.is_ok_and(|x| x.eq_ignore_ascii_case(RESPONSE)));
         }
         assert_eq!(count, 2);
@@ -867,7 +868,7 @@ mod test {
         let mut response = client_response.decapsulate_stream(merged_response).await;
         let mut count = 0;
         while let Some(next) = response.next().await {
-            count = count + 1;
+            count += 1;
             assert!(next.is_ok_and(|x| x.eq_ignore_ascii_case(RESPONSE)));
         }
         assert_eq!(count, 3);

@@ -1,5 +1,3 @@
-#![deny(clippy::pedantic)]
-
 use bhttp::{Message, Mode};
 use ohttp::ClientRequest;
 use std::{
@@ -93,12 +91,12 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
     let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
 
     let mut request = Vec::new();
-    write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
+    write!(&mut request, "POST {target_path} HTTP/1.1\r\n")?;
 
     if let Some(headers) = headers {
         for header in headers {
-            write!(&mut request, "{}\r\n", header)?;
-            info!("{}\r\n", header);
+            write!(&mut request, "{header}\r\n")?;
+            info!("{header}\r\n");
         }
     }
 
@@ -107,10 +105,7 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
 
     if let Some(fields) = fields {
         for field in fields {
-            let mut parts = field.splitn(2, '=');
-            let name = parts.next().unwrap();
-            let value = parts.next().unwrap();
-
+            let (name, value) = field.split_once('=').unwrap();
             if value.starts_with('@') {
                 let filename = value.strip_prefix('@').unwrap();
                 let mut file = File::open(filename)?;
@@ -120,19 +115,18 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
                 // Add the file
                 write!(
                     &mut body,
-                    "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
-                    boundary, filename, "audio/mp3"
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: audio/mp3\r\n\r\n"
                 )?;
                 body.extend_from_slice(&file_contents);
             } else {
-                write!(&mut body, "\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n", name)?;
-                write!(&mut body, "{}", value)?;
+                write!(&mut body, "\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n")?;
+                write!(&mut body, "{value}")?;
             }
-            write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+            write!(&mut body, "\r\n--{boundary}--\r\n")?;
         }
     }
 
-    write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
+    write!(&mut request, "Content-Type: multipart/form-data; boundary={boundary}\r\n")?;
     write!(&mut request, "Content-Length: {}\r\n", body.len())?;
     write!(&mut request, "\r\n")?;
     request.append(&mut body);
@@ -147,7 +141,7 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
         .add_root_certificate(reqwest::Certificate::from_pem(cert.as_bytes())?)
         .build()?;
 
-    println!("Contacting key management service at {}...", kms_url);
+    println!("Contacting key management service at {kms_url}...");
 
     // Make the GET request
     let response = client.get(kms_url + "/listpubkeys")
@@ -156,7 +150,7 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
         .error_for_status()?;
 
     let body = response.text().await?;
-    assert!(body.len()> 0);
+    assert!(!body.is_empty());
     Ok(body)
 }
 
@@ -171,11 +165,14 @@ struct KmsKeyConfiguration {
 /// a single use client sender from the first supported configuration.
 pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
     let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
-    let kms_config = kms_configs.pop().unwrap();
+    let kms_config = match kms_configs.pop() {
+        Some(config) => config,
+        None => return Err("No KMS configuration found".into()),
+    };
     info!("{}", "Establishing trust in key management service...");
-    let _ = verifier::verify(&kms_config.receipt, &cert)?;
+    let _ = verifier::verify(&kms_config.receipt, cert)?;
     info!("{}", "The receipt for the generation of the OHTTP key is valid.");
-    let encoded_config = hex::decode(&kms_config.key_config).unwrap();
+    let encoded_config = hex::decode(&kms_config.key_config)?;
     Ok(ClientRequest::from_encoded_config(&encoded_config)?)
 }
 
@@ -224,18 +221,16 @@ async fn main() -> Res<()> {
     let mut builder = client
         .post(&args.url)
         .header("content-type", "message/ohttp-chunked-req")
-        .header(AUTHORIZATION, format!("Bearer {}", tokenstr));
+        .header(AUTHORIZATION, format!("Bearer {tokenstr}"));
 
     // Add outer headers
     info!("Outer request headers:");
     let outer_headers = args.outer_headers.clone();
     if let Some(headers) =  outer_headers {
         for header in headers {
-            let mut parts = header.splitn(2, ':');
-            let part1 = parts.next().unwrap();
-            let part2 = parts.next().unwrap();
-            info!("Adding {}: {}", part1, part2);
-            builder = builder.header(part1, part2);
+            let (key, value) = header.split_once(':').unwrap();
+            info!("Adding {key}: {value}");
+            builder = builder.header(key, value);
             
         }
     }
@@ -269,11 +264,11 @@ async fn main() -> Res<()> {
     while let Some(result) = stream.next().await {
         match result {
             Ok(chunk) => {
-                output.write("\n".as_bytes())?;
+                output.write_all("\n".as_bytes())?;
                 output.write_all(&chunk)?;
             }
             Err(e) => {
-                println!("Error in stream {}", e)
+                println!("Error in stream {e}")
             }
         }
     }
