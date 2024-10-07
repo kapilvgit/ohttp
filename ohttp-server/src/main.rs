@@ -15,11 +15,9 @@ use ohttp::{
     hpke::{Aead, Kdf, Kem},
     KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
 };
-use warp::hyper::Body;
-use warp::Filter;
+use warp::{hyper::Body, Filter};
 
-use tokio::time::sleep;
-use tokio::time::Duration;
+use tokio::time::{sleep, Duration};
 
 use cgpuvm_attest::attest;
 use reqwest::Client;
@@ -150,7 +148,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                 match key {
                     // key identifier
                     4 => {
-                        if let Value::Integer(k) = value {                            
+                        if let Value::Integer(k) = value {
                             kid = u8::try_from(k).unwrap();
                         } else {
                             panic!("Bad KID");
@@ -230,9 +228,11 @@ async fn generate_reply(
     info!("Inner request headers");
     let mut headers = HeaderMap::new();
     for field in bin_request.header().fields() {
-        info!("{}: {}", 
+        info!(
+            "{}: {}",
             std::str::from_utf8(field.name()).unwrap(),
-            std::str::from_utf8(field.value()).unwrap());
+            std::str::from_utf8(field.value()).unwrap()
+        );
 
         headers.append(
             HeaderName::from_bytes(field.name()).unwrap(),
@@ -297,12 +297,7 @@ async fn score(
     }
 
     let inject_headers = compute_injected_headers(&headers, inject_request_headers);
-    let reply = generate_reply(
-        &ohttp, 
-        inject_headers,
-        &body[..], 
-        target, 
-        mode);
+    let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
 
     match reply.await {
         Ok((response, server_response)) => {
@@ -312,8 +307,15 @@ async fn score(
             // Move headers from the inner response into the outer response
             info!("Response headers:");
             for (key, value) in response.headers() {
-                if !FILTERED_RESPONSE_HEADERS.iter().any(|h| h.eq_ignore_ascii_case(key.as_str())) {
-                    info!("{}: {}", key, std::str::from_utf8(value.as_bytes()).unwrap());
+                if !FILTERED_RESPONSE_HEADERS
+                    .iter()
+                    .any(|h| h.eq_ignore_ascii_case(key.as_str()))
+                {
+                    info!(
+                        "{}: {}",
+                        key,
+                        std::str::from_utf8(value.as_bytes()).unwrap()
+                    );
                     builder = builder.header(key.as_str(), value.as_bytes());
                 }
             }

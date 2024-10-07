@@ -315,7 +315,10 @@ impl ServerResponse {
     {
         // Response Nonce (Nk)
         let response_nonce = Ok(self.response_nonce.clone());
-        info!("Response nonce {}", hex::encode(self.response_nonce.clone()));
+        info!(
+            "Response nonce {}",
+            hex::encode(self.response_nonce.clone())
+        );
         let nonce_stream = once(async { response_nonce });
 
         let mut input = Box::pin(input);
@@ -323,7 +326,7 @@ impl ServerResponse {
             let current = input.next().await;
             let Some(current) = current else { return };
             let Ok(mut current) = current else { return };
-            
+
             loop {
                 //info!("Processing chunk {}", std::str::from_utf8(&current).unwrap());
                 if let Some(next) = input.next().await {
@@ -528,7 +531,7 @@ mod test {
     use std::{fmt::Debug, io::ErrorKind};
 
     use async_stream::stream;
-    
+
     const KEY_ID: KeyId = 1;
     const KEM: Kem = Kem::X25519Sha256;
     const SYMMETRIC: &[SymmetricSuite] = &[
@@ -771,9 +774,9 @@ mod test {
         let (request, server_response) = server.decapsulate(&enc_request).unwrap();
         assert_eq!(&request[..], REQUEST);
 
-        let stream = stream! { 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
+        let stream = stream! {
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
         };
         let enc_response = server_response.encapsulate_stream(stream);
 
@@ -782,7 +785,7 @@ mod test {
         assert!(next.is_some_and(|x| x.is_ok_and(|x| x.eq_ignore_ascii_case(RESPONSE))));
 
         let next = response.next().await;
-        assert!(next.is_some_and(|x| x.is_ok_and(|x| x.eq_ignore_ascii_case(RESPONSE))));        
+        assert!(next.is_some_and(|x| x.is_ok_and(|x| x.eq_ignore_ascii_case(RESPONSE))));
     }
 
     #[tokio::test]
@@ -802,9 +805,9 @@ mod test {
         let (request, server_response) = server.decapsulate(&enc_request).unwrap();
         assert_eq!(&request[..], REQUEST);
 
-        let stream = stream! { 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
+        let stream = stream! {
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
         };
         let enc_response = server_response.encapsulate_stream(stream);
 
@@ -847,10 +850,10 @@ mod test {
         let (request, server_response) = server.decapsulate(&enc_request).unwrap();
         assert_eq!(&request[..], REQUEST);
 
-        let stream = stream! { 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
-            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec()); 
+        let stream = stream! {
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
+            yield Ok::<Vec<u8>, Error>(RESPONSE.to_vec());
         };
         let enc_response = server_response.encapsulate_stream(stream);
 
@@ -898,13 +901,15 @@ mod test {
             let c = chunk.unwrap();
             if c.len() % 4 == 0 {
                 let chunks: Vec<_> = c
-                .chunks(4)
-                .map(|c| Ok::<Vec<u8>, Error>(c.to_vec())).collect();
+                    .chunks(4)
+                    .map(|c| Ok::<Vec<u8>, Error>(c.to_vec()))
+                    .collect();
                 futures_util::stream::iter(chunks)
             } else if c.len() % 3 == 0 {
                 let chunks: Vec<_> = c
-                .chunks(3)
-                .map(|c| Ok::<Vec<u8>, Error>(c.to_vec())).collect();
+                    .chunks(3)
+                    .map(|c| Ok::<Vec<u8>, Error>(c.to_vec()))
+                    .collect();
                 futures_util::stream::iter(chunks)
             } else {
                 let vec = vec![Ok::<Vec<u8>, Error>(c)];
@@ -912,7 +917,9 @@ mod test {
             }
         });
 
-        let mut response = client_response.decapsulate_stream(fragmented_response).await;
+        let mut response = client_response
+            .decapsulate_stream(fragmented_response)
+            .await;
         let next = response.next().await;
         assert!(next.is_some_and(|x| x.is_ok_and(|x| x.eq_ignore_ascii_case(RESPONSE))));
     }
