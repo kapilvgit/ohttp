@@ -20,7 +20,6 @@ jobs:
       fail-fast: false
       matrix:
         hpke:
-          - nss
           - rust-hpke
         rust:
           - 1.75.0
