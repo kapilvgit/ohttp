@@ -69,6 +69,8 @@ jobs:
 
       - name: Build
         run: |
+          cp ./ohttp-server/libazguestattestation.so.1.0.5 /usr/bin/
+          ln -s /usr/bin/libazguestattestation.so.1.0.5 /usr/lib/libazguestattestation.so.1
           cargo +${{ matrix.rust }} build --tests --no-default-features --features ${{ matrix.hpke }},client,server
 
       - name: Run Tests
