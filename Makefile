@@ -5,7 +5,7 @@ MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
 MODEL ?= whisper_opensource
 ifeq ($(MODEL), whisper_opensource)
 	TARGET ?= http://127.0.0.1:3000
-	TARGET_PATH ?= '/v1/audio/transcriptions'
+	TARGET_PATH ?= '/whisper'
 	SCORING_ENDPOINT ?= 'http://localhost:9443/score'
 else ifeq ($(MODEL), whisper_aoai_local)
 	TARGET ?= http://127.0.0.1:5001
@@ -52,6 +52,9 @@ run-server-container-attest:
 
 run-whisper:
 	docker run --network=host whisper-api 
+
+run-whisper-faster: 
+	docker run --network=host fedirz/faster-whisper-server:latest-cuda
 
 run-server-streaming:
 	docker compose -f ./docker/docker-compose-streaming.yml up
