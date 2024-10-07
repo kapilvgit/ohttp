@@ -1,21 +1,21 @@
-#![deny(clippy::pedantic)]
-
 use bhttp::{Message, Mode};
-use ohttp::ClientRequest;
-use std::{
-    fs::{self, File}, io::{self, Read, Write}, ops::Deref, path::PathBuf, str::FromStr
-};
-use std::io::Cursor;
 use clap::Parser;
-use reqwest::Client;
-use futures_util::stream::unfold;
-use futures_util::StreamExt;
+use futures_util::{stream::unfold, StreamExt};
 use log::info;
+use ohttp::ClientRequest;
+use reqwest::{header::AUTHORIZATION, Client};
 use serde::Deserialize;
+use std::{
+    fs::{self, File},
+    io::{self, Cursor, Read, Write},
+    ops::Deref,
+    path::PathBuf,
+    str::FromStr,
+};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
-const DEFAULT_KMS_URL: &str ="https://acceu-aml-504.confidential-ledger.azure.com";
+const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.com";
 
 #[derive(Debug, Clone)]
 struct HexArg(Vec<u8>);
@@ -81,19 +81,28 @@ struct Args {
     /// List of headers in the outer request
     #[arg(long, short = 'O')]
     outer_headers: Option<Vec<String>>,
+
+    /// List of headers in the outer request
+    #[arg(long, short = 'T')]
+    token: Option<String>,
 }
 
 // Create a multi-part request from a file
-fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fields: Option<Vec<String>>) -> Res<Vec<u8>> {
+fn create_multipart_request(
+    target_path: &str,
+    headers: Option<Vec<String>>,
+    fields: Option<Vec<String>>,
+) -> Res<Vec<u8>> {
     // Define boundary for multipart
     let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
 
     let mut request = Vec::new();
-    write!(&mut request, "POST {} HTTP/1.1\r\n", target_path)?;
+    write!(&mut request, "POST {target_path} HTTP/1.1\r\n")?;
 
     if let Some(headers) = headers {
         for header in headers {
-            write!(&mut request, "{}\r\n", header)?;
+            write!(&mut request, "{header}\r\n")?;
+            info!("{header}\r\n");
         }
     }
 
@@ -102,10 +111,7 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
 
     if let Some(fields) = fields {
         for field in fields {
-            let mut parts = field.splitn(2, '=');
-            let name = parts.next().unwrap();
-            let value = parts.next().unwrap();
-
+            let (name, value) = field.split_once('=').unwrap();
             if value.starts_with('@') {
                 let filename = value.strip_prefix('@').unwrap();
                 let mut file = File::open(filename)?;
@@ -115,19 +121,24 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
                 // Add the file
                 write!(
                     &mut body,
-                    "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
-                    boundary, filename, "audio/mp3"
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: audio/mp3\r\n\r\n"
                 )?;
                 body.extend_from_slice(&file_contents);
             } else {
-                write!(&mut body, "\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n", name)?;
-                write!(&mut body, "{}", value)?;
+                write!(
+                    &mut body,
+                    "\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                )?;
+                write!(&mut body, "{value}")?;
             }
-            write!(&mut body, "\r\n--{}--\r\n", boundary)?;
+            write!(&mut body, "\r\n--{boundary}--\r\n")?;
         }
     }
-    
-    write!(&mut request, "Content-Type: multipart/form-data; boundary={}\r\n", boundary)?;
+
+    write!(
+        &mut request,
+        "Content-Type: multipart/form-data; boundary={boundary}\r\n"
+    )?;
     write!(&mut request, "Content-Length: {}\r\n", body.len())?;
     write!(&mut request, "\r\n")?;
     request.append(&mut body);
@@ -137,21 +148,22 @@ fn create_multipart_request(target_path: &str, headers: Option<Vec<String>>, fie
 
 // Get key configuration from KMS
 async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
-   // Create a client with the CA certificate
-   let client = Client::builder()
+    // Create a client with the CA certificate
+    let client = Client::builder()
         .add_root_certificate(reqwest::Certificate::from_pem(cert.as_bytes())?)
         .build()?;
 
-    println!("Contacting key management service at {}...", kms_url);
+    println!("Contacting key management service at {kms_url}...");
 
     // Make the GET request
-    let response = client.get(kms_url + "/listpubkeys")
+    let response = client
+        .get(kms_url + "/listpubkeys")
         .send()
         .await?
         .error_for_status()?;
 
     let body = response.text().await?;
-    assert!(body.len()> 0);
+    assert!(!body.is_empty());
     Ok(body)
 }
 
@@ -162,15 +174,21 @@ struct KmsKeyConfiguration {
     receipt: String,
 }
 
-/// Reads a json containing key configurations with receipts and constructs 
+/// Reads a json containing key configurations with receipts and constructs
 /// a single use client sender from the first supported configuration.
 pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
     let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
-    let kms_config = kms_configs.pop().unwrap();
+    let kms_config = match kms_configs.pop() {
+        Some(config) => config,
+        None => return Err("No KMS configuration found".into()),
+    };
     info!("{}", "Establishing trust in key management service...");
-    let _ = verifier::verify(&kms_config.receipt, &cert)?;
-    info!("{}", "The receipt for the generation of the OHTTP key is valid.");
-    let encoded_config = hex::decode(&kms_config.key_config).unwrap();
+    let _ = verifier::verify(&kms_config.receipt, cert)?;
+    info!(
+        "{}",
+        "The receipt for the generation of the OHTTP key is valid."
+    );
+    let encoded_config = hex::decode(&kms_config.key_config)?;
     Ok(ClientRequest::from_encoded_config(&encoded_config)?)
 }
 
@@ -182,7 +200,7 @@ async fn main() -> Res<()> {
 
     info!("================== STEP 1 ==================");
 
-    let request = { 
+    let request = {
         let form_fields = args.form_fields.clone();
         let headers = args.headers.clone();
         let request = create_multipart_request(&args.target_path, headers, form_fields)?;
@@ -208,30 +226,45 @@ async fn main() -> Res<()> {
     };
 
     info!("================== STEP 2 ==================");
-    
+
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    info!("Sending encrypted OHTTP request to {}: {}", args.url, hex::encode(&enc_request[0..60]));
+    info!(
+        "Sending encrypted OHTTP request to {}: {}",
+        args.url,
+        hex::encode(&enc_request[0..60])
+    );
 
     let client = reqwest::ClientBuilder::new().build()?;
 
+    let tokenstr = args.token.as_ref().map_or("None", |s| s.as_str());
+
     let mut builder = client
         .post(&args.url)
-        .header("content-type", "message/ohttp-chunked-req");
+        .header("content-type", "message/ohttp-chunked-req")
+        .header(AUTHORIZATION, format!("Bearer {tokenstr}"));
 
     // Add outer headers
+    info!("Outer request headers:");
     let outer_headers = args.outer_headers.clone();
-    if let Some(headers) =  outer_headers {
+    if let Some(headers) = outer_headers {
         for header in headers {
-            let mut parts = header.splitn(2, ':');
-            builder = builder.header(parts.next().unwrap(), parts.next().unwrap());
+            let (key, value) = header.split_once(':').unwrap();
+            info!("Adding {key}: {value}");
+            builder = builder.header(key, value);
         }
     }
-    
-    let response = builder
-        .body(enc_request)
-        .send()
-        .await?
-        .error_for_status()?;
+
+    let response = builder.body(enc_request).send().await?.error_for_status()?;
+
+    info!("response status: {}\n", response.status());
+    info!("Response headers:");
+    for (key, value) in response.headers() {
+        info!(
+            "{}: {}",
+            key,
+            std::str::from_utf8(value.as_bytes()).unwrap()
+        );
+    }
 
     let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
         Box::new(File::open(outfile)?)
@@ -250,11 +283,11 @@ async fn main() -> Res<()> {
     while let Some(result) = stream.next().await {
         match result {
             Ok(chunk) => {
-                output.write("\n".as_bytes())?;
+                output.write_all("\n".as_bytes())?;
                 output.write_all(&chunk)?;
             }
             Err(e) => {
-                println!("Error in stream {}", e)
+                println!("Error in stream {e}")
             }
         }
     }

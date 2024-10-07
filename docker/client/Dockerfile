@@ -1,4 +1,4 @@
-FROM rust:1.75 as builder
+FROM rust:1.75 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -yq \

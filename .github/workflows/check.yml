@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-
+  
 jobs:
   check:
     name: Continuous Integration
@@ -20,10 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         hpke:
-          - nss
           - rust-hpke
         rust:
-          - 1.63.0 # MSRV
+          - 1.75.0
           - stable
 
     steps:
@@ -48,6 +47,7 @@ jobs:
             gyp \
             libclang-dev \
             libssl-dev \
+            libtss2-dev \
             lld \
             llvm \
             make \
@@ -69,6 +69,7 @@ jobs:
 
       - name: Build
         run: |
+          sudo ln -s ${{ github.workspace }}/ohttp-server/libazguestattestation.so.1.0.5 /usr/lib/libazguestattestation.so
           cargo +${{ matrix.rust }} build --tests --no-default-features --features ${{ matrix.hpke }},client,server
 
       - name: Run Tests
