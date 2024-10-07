@@ -147,14 +147,3 @@ pub fn verify(receipt_str: &str, service_cert: &str) -> Res<bool> {
     let result = check_signature(&receipt.cert, &receipt.signature, &root)?;
     Ok(result)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = verify("", "").unwrap();
-        assert!(result);
-    }
-}
