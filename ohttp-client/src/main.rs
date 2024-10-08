@@ -1,7 +1,7 @@
 use bhttp::{Message, Mode};
 use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
-use log::info;
+use log::{info, trace};
 use ohttp::ClientRequest;
 use reqwest::{header::AUTHORIZATION, Client};
 use serde::Deserialize;
@@ -153,7 +153,7 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
         .add_root_certificate(reqwest::Certificate::from_pem(cert.as_bytes())?)
         .build()?;
 
-    println!("Contacting key management service at {kms_url}...");
+    info!("Contacting key management service at {kms_url}...");
 
     // Make the GET request
     let response = client
@@ -198,7 +198,7 @@ async fn main() -> Res<()> {
     ::ohttp::init();
     env_logger::try_init().unwrap();
 
-    info!("================== STEP 1 ==================");
+    trace!("================== STEP 1 ==================");
 
     let request = {
         let form_fields = args.form_fields.clone();
@@ -225,13 +225,15 @@ async fn main() -> Res<()> {
         ohttp::ClientRequest::from_encoded_config_list(config)?
     };
 
-    info!("================== STEP 2 ==================");
+    trace!("================== STEP 2 ==================");
 
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
+    let enc_request_len = enc_request.len();
     info!(
-        "Sending encrypted OHTTP request to {}: {}",
+        "Sending encrypted OHTTP request to {}: {}...{}",
         args.url,
-        hex::encode(&enc_request[0..60])
+        hex::encode(&enc_request[..3]),
+        hex::encode(&enc_request[enc_request_len-3..]),
     );
 
     let client = reqwest::ClientBuilder::new().build()?;

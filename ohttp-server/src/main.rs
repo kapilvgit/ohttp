@@ -30,7 +30,7 @@ use serde_json::from_str;
 use hpke::Deserializable;
 use serde::Deserialize;
 
-use log::{error, info, trace};
+use log::{error, info, trace, LevelFilter};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -91,7 +91,8 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
         panic!("Failed to get MAA token. You must be root to access TPM.")
     };
     let token = String::from_utf8(tok).unwrap();
-    info!("Fetched MAA token: {token}");
+    info!("Fetched MAA token");
+    trace!("{token}");
 
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
@@ -130,7 +131,10 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                 from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
 
             info!(
-                "SKR successful, KID={}, Receipt={}, Key={}",
+                "SKR successful"
+            );
+            trace!(
+                "KID={}, Receipt={}, Key={}",
                 skr.kid, skr.receipt, skr.key
             );
             key = skr.key;
@@ -364,7 +368,7 @@ fn with_ohttp(
 async fn main() -> Res<()> {
     let args = Args::parse();
     ::ohttp::init();
-    env_logger::try_init().unwrap();
+    json_log::init_with_level(LevelFilter::Info).unwrap();
 
     let config = if args.attest {
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
@@ -383,7 +387,7 @@ async fn main() -> Res<()> {
 
     let ohttp = OhttpServer::new(config)?;
     let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()])?);
-    info!("Config: {}", config);
+    trace!("Config: {}", config);
 
     let mode = args.mode();
     let target = args.target;

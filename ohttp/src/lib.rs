@@ -28,7 +28,7 @@ use crate::{
     hpke::{Aead as AeadId, Kdf, Kem},
 };
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use log::{info, trace};
+use log::{info, trace, LevelFilter};
 use std::{
     cmp::max,
     convert::TryFrom,
@@ -314,12 +314,16 @@ impl ServerResponse {
         E: std::fmt::Debug + Send,
     {
         // Response Nonce (Nk)
-        let response_nonce = Ok(self.response_nonce.clone());
+        let response_nonce_vec : Vec<u8> = self.response_nonce.to_vec();
+        let result = Ok(response_nonce_vec.clone());
+        let response_nonce_len = response_nonce_vec.len();
         info!(
-            "Response nonce {}",
-            hex::encode(self.response_nonce.clone())
+            "Response nonce {}...{}({})",
+            hex::encode(&response_nonce_vec[..3]),
+            hex::encode(&response_nonce_vec[response_nonce_len-3..]),
+            response_nonce_len
         );
-        let nonce_stream = once(async { response_nonce });
+        let nonce_stream = once(async { result });
 
         let mut input = Box::pin(input);
         let output_stream = stream! {
@@ -342,7 +346,8 @@ impl ServerResponse {
                     // AEAD-Protected Chunk (..),
                     enc_response.append(&mut ct);
 
-                    info!("Encapsulated chunk {}({},{})", hex::encode(&enc_response), ct.len(), enc_response.len());
+                    let enc_response_len = enc_response.len();
+                    info!("Encapsulated chunk {}...{}({},{})", hex::encode(&enc_response[..3]), hex::encode(&enc_response[enc_response_len-3..]), ct.len(), enc_response_len);
                     yield Ok(enc_response);
                     current = next.unwrap();
                 } else {
@@ -358,7 +363,9 @@ impl ServerResponse {
                     let mut enc_length = self.variant_encode(ct.len());
                     enc_response.append(&mut enc_length);
                     enc_response.append(&mut ct);
-                    info!("Encapsulated final chunk {}({},{})", hex::encode(&enc_response), ct.len(), enc_response.len());
+
+                    let enc_response_len = enc_response.len();
+                    info!("Encapsulated final chunk {}...{}({},{})", hex::encode(&enc_response[..3]), hex::encode(&enc_response[enc_response_len-3..]), ct.len(), enc_response_len);
                     yield Ok(enc_response);
                     return;
                 }
@@ -471,7 +478,8 @@ impl ClientResponse {
         let output_stream = stream! {
             while let Some(next) = stream.next().await {
                 let mut enc_response = next.unwrap();
-                info!("Received chunk: {}({})", hex::encode(&enc_response), enc_response.len());
+                let enc_response_len = enc_response.len();
+                info!("Received chunk: {}...{}({})", hex::encode(&enc_response[..3]), hex::encode(&enc_response[enc_response_len-3..]), enc_response_len);
                 buffer.append(&mut enc_response);
                 info!("Buffer size {}", buffer.len());
 
@@ -479,7 +487,8 @@ impl ClientResponse {
                 if !nonce_received && buffer.len() >= nonce_size {
                     nonce_received = true;
                     let nonce: Vec<_> = buffer.drain(0..nonce_size).collect();
-                    info!("Setting response nonce: {}({})", hex::encode(&nonce), nonce.len());
+                    let nonce_len = nonce.len();
+                    info!("Setting response nonce: {}...{}({})", hex::encode(&nonce[..3]), hex::encode(&nonce[nonce_len-3..]), nonce_len);
                     self.set_response_nonce(&nonce).unwrap();
                 }
 
@@ -503,7 +512,7 @@ impl ClientResponse {
                     if buffer.len() >= len {
                         buffer.drain(0..bytes_read);
                         let ct: Vec<_> = buffer.drain(0..len).collect();
-                        info!("Decapsulating chunk {}({})", hex::encode(&ct), len);
+                        info!("Decapsulating chunk {}...{}({})", hex::encode(&ct[..3]), hex::encode(&ct[len-3..]), len);
                         self.seq += 1;
                         yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, &ct);
                     } else {
@@ -546,7 +555,7 @@ mod test {
 
     fn init() {
         crate::init();
-        _ = env_logger::try_init(); // ignore errors here
+        json_log::init_with_level(log::LevelFilter::Info).unwrap(); 
     }
 
     #[test]
