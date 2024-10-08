@@ -28,13 +28,13 @@ use crate::{
     hpke::{Aead as AeadId, Kdf, Kem},
 };
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use tracing::{info, trace};
 use std::{
     cmp::max,
     convert::TryFrom,
     io::{BufReader, Read},
     mem::size_of,
 };
+use tracing::{info, trace};
 
 #[cfg(feature = "nss")]
 use crate::nss::random;
@@ -314,22 +314,18 @@ impl ServerResponse {
         E: std::fmt::Debug + Send,
     {
         // Response Nonce (Nk)
-        let response_nonce_vec : Vec<u8> = self.response_nonce.to_vec();
+        let response_nonce_vec: Vec<u8> = self.response_nonce.to_vec();
         let result = Ok(response_nonce_vec.clone());
         let response_nonce_len = response_nonce_vec.len();
         if response_nonce_len > 6 {
             info!(
                 "Response nonce {}...{}({})",
                 hex::encode(&response_nonce_vec[..3]),
-                hex::encode(&response_nonce_vec[response_nonce_len-3..]),
+                hex::encode(&response_nonce_vec[response_nonce_len - 3..]),
                 response_nonce_len
             );
-        }
-        else {
-            info!(
-                "Response nonce lenth ({})",
-                response_nonce_len
-            );
+        } else {
+            info!("Response nonce length ({})", response_nonce_len);
         }
 
         let nonce_stream = once(async { result });
@@ -361,7 +357,7 @@ impl ServerResponse {
                     }
                     else {
                         info!("Encapsulated chunk length ({},{})", ct.len(), enc_response_len);
-                    }   
+                    }
 
                     yield Ok(enc_response);
                     current = next.unwrap();

@@ -30,8 +30,8 @@ use serde_json::from_str;
 use hpke::Deserializable;
 use serde::Deserialize;
 
-use tracing_subscriber::FmtSubscriber;
 use tracing::{error, info, trace};
+use tracing_subscriber::FmtSubscriber;
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -131,13 +131,8 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
             let skr: ExportedKey =
                 from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
 
-            info!(
-                "SKR successful"
-            );
-            trace!(
-                "KID={}, Receipt={}, Key={}",
-                skr.kid, skr.receipt, skr.key
-            );
+            info!("SKR successful");
+            trace!("KID={}, Receipt={}, Key={}", skr.kid, skr.receipt, skr.key);
             key = skr.key;
             break;
         }
@@ -369,16 +364,15 @@ fn with_ohttp(
 async fn main() -> Res<()> {
     let args = Args::parse();
     ::ohttp::init();
-    
+
     // Build a simple subscriber that outputs to stdout
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::INFO) 
+        .with_max_level(tracing::Level::INFO)
         .json()
         .finish();
 
     // Set the subscriber as global default
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let config = if args.attest {
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());

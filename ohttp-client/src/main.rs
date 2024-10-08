@@ -234,14 +234,12 @@ async fn main() -> Res<()> {
             "Sending encrypted OHTTP request to {}: {}...{}",
             args.url,
             hex::encode(&enc_request[..3]),
-            hex::encode(&enc_request[enc_request_len-3..]),
+            hex::encode(&enc_request[enc_request_len - 3..]),
         );
-    }
-    else {
+    } else {
         info!(
             "Sending encrypted OHTTP request with length {} to {}",
-            enc_request_len,
-            args.url,
+            enc_request_len, args.url,
         );
     }
 
