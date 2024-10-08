@@ -30,7 +30,8 @@ use serde_json::from_str;
 use hpke::Deserializable;
 use serde::Deserialize;
 
-use log::{error, info, trace, LevelFilter};
+use tracing_subscriber::FmtSubscriber;
+use tracing::{error, info, trace};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -368,7 +369,16 @@ fn with_ohttp(
 async fn main() -> Res<()> {
     let args = Args::parse();
     ::ohttp::init();
-    json_log::init_with_level(LevelFilter::Info).unwrap();
+    
+    // Build a simple subscriber that outputs to stdout
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::INFO) 
+        .json()
+        .finish();
+
+    // Set the subscriber as global default
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
 
     let config = if args.attest {
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());

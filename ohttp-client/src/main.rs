@@ -229,12 +229,21 @@ async fn main() -> Res<()> {
 
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
     let enc_request_len = enc_request.len();
-    info!(
-        "Sending encrypted OHTTP request to {}: {}...{}",
-        args.url,
-        hex::encode(&enc_request[..3]),
-        hex::encode(&enc_request[enc_request_len-3..]),
-    );
+    if enc_request_len > 6 {
+        info!(
+            "Sending encrypted OHTTP request to {}: {}...{}",
+            args.url,
+            hex::encode(&enc_request[..3]),
+            hex::encode(&enc_request[enc_request_len-3..]),
+        );
+    }
+    else {
+        info!(
+            "Sending encrypted OHTTP request with length {} to {}",
+            enc_request_len,
+            args.url,
+        );
+    }
 
     let client = reqwest::ClientBuilder::new().build()?;
 
