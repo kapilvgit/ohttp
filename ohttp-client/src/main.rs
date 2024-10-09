@@ -228,20 +228,11 @@ async fn main() -> Res<()> {
     trace!("================== STEP 2 ==================");
 
     let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    let enc_request_len = enc_request.len();
-    if enc_request_len > 6 {
-        info!(
-            "Sending encrypted OHTTP request to {}: {}...{}",
-            args.url,
-            hex::encode(&enc_request[..3]),
-            hex::encode(&enc_request[enc_request_len - 3..]),
-        );
-    } else {
-        info!(
-            "Sending encrypted OHTTP request with length {} to {}",
-            enc_request_len, args.url,
-        );
-    }
+    info!(
+        "Sending encrypted OHTTP request to {}: {}",
+        args.url,
+        hex::encode(&enc_request[0..60])
+    );
 
     let client = reqwest::ClientBuilder::new().build()?;
 

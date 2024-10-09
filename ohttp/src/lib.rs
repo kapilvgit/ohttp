@@ -314,21 +314,13 @@ impl ServerResponse {
         E: std::fmt::Debug + Send,
     {
         // Response Nonce (Nk)
-        let response_nonce_vec: Vec<u8> = self.response_nonce.to_vec();
-        let result = Ok(response_nonce_vec.clone());
-        let response_nonce_len = response_nonce_vec.len();
-        if response_nonce_len > 6 {
-            info!(
-                "Response nonce {}...{}({})",
-                hex::encode(&response_nonce_vec[..3]),
-                hex::encode(&response_nonce_vec[response_nonce_len - 3..]),
-                response_nonce_len
-            );
-        } else {
-            info!("Response nonce length ({})", response_nonce_len);
-        }
-
-        let nonce_stream = once(async { result });
+        let response_nonce = Ok(self.response_nonce.clone());
+        info!(
+            "Response nonce {}...({})",
+            hex::encode(&self.response_nonce.clone()[..16]),
+            self.response_nonce.len()
+        );
+        let nonce_stream = once(async { response_nonce });
 
         let mut input = Box::pin(input);
         let output_stream = stream! {
@@ -351,13 +343,8 @@ impl ServerResponse {
                     // AEAD-Protected Chunk (..),
                     enc_response.append(&mut ct);
 
-                    let enc_response_len = enc_response.len();
-                    if enc_response_len > 6 {
-                        info!("Encapsulated chunk {}...{}({},{})", hex::encode(&enc_response[..3]), hex::encode(&enc_response[enc_response_len-3..]), ct.len(), enc_response_len);
-                    }
-                    else {
-                        info!("Encapsulated chunk length ({},{})", ct.len(), enc_response_len);
-                    }
+                    info!("Encapsulated chunk ({},{})", ct.len(), enc_response.len());
+                    trace!("{}", hex::encode(&enc_response));
 
                     yield Ok(enc_response);
                     current = next.unwrap();
@@ -375,13 +362,8 @@ impl ServerResponse {
                     enc_response.append(&mut enc_length);
                     enc_response.append(&mut ct);
 
-                    let enc_response_len = enc_response.len();
-                    if enc_response_len > 6 {
-                        info!("Encapsulated final chunk {}...{}({},{})", hex::encode(&enc_response[..3]), hex::encode(&enc_response[enc_response_len-3..]), ct.len(), enc_response_len);
-                    }
-                    else {
-                        info!("Encapsulated final chunk length ({},{})", ct.len(), enc_response_len);
-                    }
+                    info!("Encapsulated final chunk ({},{})", ct.len(), enc_response.len());
+                    trace!("{}", hex::encode(&enc_response));
                     yield Ok(enc_response);
                     return;
                 }
@@ -494,13 +476,8 @@ impl ClientResponse {
         let output_stream = stream! {
             while let Some(next) = stream.next().await {
                 let mut enc_response = next.unwrap();
-                let enc_response_len = enc_response.len();
-                if enc_response_len > 6 {
-                    info!("Received chunk: {}...{}({})", hex::encode(&enc_response[..3]), hex::encode(&enc_response[enc_response_len-3..]), enc_response_len);
-                }
-                else {
-                    info!("Received chunk length ({})", enc_response_len);
-                }
+                info!("Received chunk: ({})", enc_response.len());
+                trace!("{}", hex::encode(&enc_response));
                 buffer.append(&mut enc_response);
                 info!("Buffer size {}", buffer.len());
 
@@ -508,13 +485,7 @@ impl ClientResponse {
                 if !nonce_received && buffer.len() >= nonce_size {
                     nonce_received = true;
                     let nonce: Vec<_> = buffer.drain(0..nonce_size).collect();
-                    let nonce_len = nonce.len();
-                    if nonce_len > 6 {
-                        info!("Setting response nonce: {}...{}({})", hex::encode(&nonce[..3]), hex::encode(&nonce[nonce_len-3..]), nonce_len);
-                    }
-                    else {
-                        info!("Setting response nonce length:({})", nonce_len);
-                    }
+                    info!("Setting response nonce: {}...({})", hex::encode(&nonce[..16]), nonce.len());
                     self.set_response_nonce(&nonce).unwrap();
                 }
 
@@ -538,12 +509,8 @@ impl ClientResponse {
                     if buffer.len() >= len {
                         buffer.drain(0..bytes_read);
                         let ct: Vec<_> = buffer.drain(0..len).collect();
-                        if len > 6 {
-                            info!("Decapsulating chunk {}...{}({})", hex::encode(&ct[..3]), hex::encode(&ct[len-3..]), len);
-                        }
-                        else {
-                            info!("Decapsulating chunk length ({})", len);
-                        }
+                        info!("Decapsulating chunk ({})", len);
+                        trace!("{}", hex::encode(&ct));
                         self.seq += 1;
                         yield self.aead.as_mut().unwrap().open(aad.as_bytes(), self.seq - 1, &ct);
                     } else {

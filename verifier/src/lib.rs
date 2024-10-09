@@ -58,7 +58,7 @@ fn compute_leaf(leaf_components: LeafComponents) -> Res<Vec<u8>> {
     hasher.update(leaf_components.commit_evidence.as_bytes())?;
     let mut commit_evidence_digest = hasher.finish()?.to_vec();
 
-    /* info!(
+    info!(
         "  {} {}",
         "write_set_digest: ".yellow(),
         leaf_components.write_set_digest
@@ -72,7 +72,7 @@ fn compute_leaf(leaf_components: LeafComponents) -> Res<Vec<u8>> {
         "  {} {}",
         "claims_digest: ".yellow(),
         leaf_components.claims_digest
-    ); */
+    );
 
     // Concatenate write_set_digest, commit_evidence_digest, and claims_digest
     let mut claims_digest_bytes = hex::decode(leaf_components.claims_digest.clone())?;
@@ -136,12 +136,12 @@ pub fn verify(receipt_str: &str, service_cert: &str) -> Res<bool> {
     // Compute leaf
     let leaf = compute_leaf(receipt.leaf_components)?;
 
-    //info!("  {} {}", "leaf: ".yellow(), hex::encode(&leaf));
+    info!("  {} {}", "leaf: ".yellow(), hex::encode(&leaf));
 
     // Compute root using leaf and proof
     let root = compute_root(receipt.proof, leaf)?;
 
-    //info!("  {} {}", "root: ".yellow(), hex::encode(&root));
+    info!("  {} {}", "root: ".yellow(), hex::encode(&root));
 
     // Check signature over the root
     let result = check_signature(&receipt.cert, &receipt.signature, &root)?;

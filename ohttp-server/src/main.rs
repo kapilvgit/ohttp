@@ -132,7 +132,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                 from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
 
             info!("SKR successful");
-            trace!("KID={}, Receipt={}, Key={}", skr.kid, skr.receipt, skr.key);
+            trace!("KID={}, Receipt={}", skr.kid, skr.receipt);
             key = skr.key;
             break;
         }
