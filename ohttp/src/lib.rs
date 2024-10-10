@@ -317,7 +317,7 @@ impl ServerResponse {
         let response_nonce = Ok(self.response_nonce.clone());
         info!(
             "Response nonce {}...({})",
-            hex::encode(&self.response_nonce.clone()[..16]),
+            hex::encode(&self.response_nonce.clone()),
             self.response_nonce.len()
         );
         let nonce_stream = once(async { response_nonce });
@@ -485,7 +485,7 @@ impl ClientResponse {
                 if !nonce_received && buffer.len() >= nonce_size {
                     nonce_received = true;
                     let nonce: Vec<_> = buffer.drain(0..nonce_size).collect();
-                    info!("Setting response nonce: {}...({})", hex::encode(&nonce[..16]), nonce.len());
+                    info!("Setting response nonce: {}...({})", hex::encode(&nonce), nonce.len());
                     self.set_response_nonce(&nonce).unwrap();
                 }
 
