@@ -14,6 +14,8 @@ mod rand;
 #[cfg(feature = "rust-hpke")]
 mod rh;
 
+use tracing_subscriber::FmtSubscriber;
+
 use async_stream::stream;
 use futures::{stream::Stream, StreamExt};
 use futures_util::stream::once;
@@ -69,6 +71,15 @@ pub type KeyId = u8;
 pub fn init() {
     #[cfg(feature = "nss")]
     nss::init();
+
+    // Build a simple subscriber that outputs to stdout
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::TRACE)
+        .json()
+        .finish();
+
+    // Set the subscriber as global default
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 }
 
 /// Construct the info parameter we use to initialize an `HpkeS` instance.
