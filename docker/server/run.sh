@@ -19,7 +19,7 @@ if [[ -z ${TARGET} ]]; then
 fi
 
 if is_valid_url $TARGET; then 
-  CMD="RUST_LOG=info /usr/local/bin/ohttp-server --target $TARGET"
+  CMD="RUST_LOG=trace /usr/local/bin/ohttp-server --target $TARGET"
 else
   echo "TARGET is not a valid URL"
   exit 1
@@ -30,7 +30,7 @@ if [[ -z ${INSTANCE_SPECIFIC_KEY} ]]; then
 fi
 
 if [[ -n ${INJECT_HEADERS} ]]; then 
-  CMD="$CMD -i ${INJECT_HEADERS}"
+  CMD="$CMD --inject-request-headers ${INJECT_HEADERS}"
 fi
 
 if [[ -n ${MAA_URL} ]]; then 

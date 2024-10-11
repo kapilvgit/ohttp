@@ -23,6 +23,7 @@ fi
 # Obtain KMS service certificate
 curl -s -k ${KMS_URL}/node/network | jq -r .service_certificate > /tmp/service_cert.pem
 
-RUST_LOG=info /usr/local/bin/ohttp-client ${TARGET}/score \
-  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  --kms-url ${KMS_URL} --kms-cert /tmp/service_cert.pem 
+RUST_LOG=info /usr/local/bin/ohttp-client ${TARGET} \
+  --target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
+  --kms-url ${KMS_URL} --kms-cert /tmp/service_cert.pem \
+  -O 'openai-internal-enableasrsupport:true' -T ${TOKEN} 

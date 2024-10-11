@@ -31,7 +31,6 @@ use hpke::Deserializable;
 use serde::Deserialize;
 
 use tracing::{error, info, trace};
-use tracing_subscriber::FmtSubscriber;
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -225,11 +224,13 @@ async fn generate_reply(
     };
 
     // Copy headers from the encapsulated request
-    info!("Inner request headers");
+    info!("Creating inner request headers");
     let mut headers = HeaderMap::new();
+
+    info!("Appending multi-form fields");
     for field in bin_request.header().fields() {
         info!(
-            "{}: {}",
+            "    {}: {}",
             std::str::from_utf8(field.name()).unwrap(),
             std::str::from_utf8(field.value()).unwrap()
         );
@@ -240,11 +241,11 @@ async fn generate_reply(
         );
     }
 
+    info!("Appending injected headers");
     // Inject additional headers from the outer request
-    info!("Inner request injected headers");
     for (key, value) in inject_headers {
         if let Some(key) = key {
-            info!("{}: {}", key.as_str(), value.to_str().unwrap());
+            info!("    {}: {}", key.as_str(), value.to_str().unwrap());
             headers.append(key, value);
         }
     }
@@ -291,12 +292,26 @@ async fn score(
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     info!("Received encapsulated score request for target {}", target);
-    info!("Request headers");
+
+    info!("Request headers length = {}", headers.len());
     for (key, value) in &headers {
-        info!("{}: {}", key, value.to_str().unwrap());
+        info!("    {}: {}", key, value.to_str().unwrap());
     }
 
-    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    info!(
+        "Request inject headers length = {}",
+        inject_request_headers.len()
+    );
+    for key in &inject_request_headers {
+        info!("    {}", key);
+    }
+
+    let inject_headers: HeaderMap = compute_injected_headers(&headers, inject_request_headers);
+    info!("Injected headers length = {}", inject_headers.len());
+    for (key, value) in &inject_headers {
+        info!("    {}: {}", key, value.to_str().unwrap());
+    }
+
     let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
 
     match reply.await {
@@ -312,7 +327,7 @@ async fn score(
                     .any(|h| h.eq_ignore_ascii_case(key.as_str()))
                 {
                     info!(
-                        "{}: {}",
+                        "    {}: {}",
                         key,
                         std::str::from_utf8(value.as_bytes()).unwrap()
                     );
@@ -364,15 +379,6 @@ fn with_ohttp(
 async fn main() -> Res<()> {
     let args = Args::parse();
     ::ohttp::init();
-
-    // Build a simple subscriber that outputs to stdout
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::INFO)
-        .json()
-        .finish();
-
-    // Set the subscriber as global default
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let config = if args.attest {
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
