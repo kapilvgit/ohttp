@@ -14,7 +14,7 @@ mod rand;
 #[cfg(feature = "rust-hpke")]
 mod rh;
 
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use async_stream::stream;
 use futures::{stream::Stream, StreamExt};
@@ -74,7 +74,7 @@ pub fn init() {
 
     // Build a simple subscriber that outputs to stdout
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::TRACE)
+        .with_env_filter(EnvFilter::from_default_env())
         .json()
         .finish();
 

@@ -31,7 +31,6 @@ use hpke::Deserializable;
 use serde::Deserialize;
 
 use tracing::{error, info, trace};
-use tracing_subscriber::FmtSubscriber;
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -280,7 +279,6 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
             }
         }
     }
-    result.append("openai-internal-enableasrsupport", HeaderValue::from_static("true"));
     result
 }
 
@@ -382,15 +380,6 @@ async fn main() -> Res<()> {
     let args = Args::parse();
     ::ohttp::init();
 
-    /* // Build a simple subscriber that outputs to stdout
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::TRACE)
-        .json()
-        .finish();
-
-    // Set the subscriber as global default
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
- */
     let config = if args.attest {
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
         let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
