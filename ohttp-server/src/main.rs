@@ -231,7 +231,7 @@ async fn generate_reply(
     info!("Appending multi-form fields");
     for field in bin_request.header().fields() {
         info!(
-            "{}: {}",
+            "    {}: {}",
             std::str::from_utf8(field.name()).unwrap(),
             std::str::from_utf8(field.value()).unwrap()
         );
@@ -246,7 +246,7 @@ async fn generate_reply(
     // Inject additional headers from the outer request
     for (key, value) in inject_headers {
         if let Some(key) = key {
-            info!("{}: {}", key.as_str(), value.to_str().unwrap());
+            info!("    {}: {}", key.as_str(), value.to_str().unwrap());
             headers.append(key, value);
         }
     }
@@ -280,6 +280,7 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
             }
         }
     }
+    result.append("openai-internal-enableasrsupport", HeaderValue::from_static("true"));
     result
 }
 
@@ -296,7 +297,7 @@ async fn score(
 
     info!("Request headers length = {}", headers.len());
     for (key, value) in &headers {
-        info!("{}: {}", key, value.to_str().unwrap());
+        info!("    {}: {}", key, value.to_str().unwrap());
     }
 
     info!(
@@ -304,13 +305,13 @@ async fn score(
         inject_request_headers.len()
     );
     for key in &inject_request_headers {
-        info!("{}", key);
+        info!("    {}", key);
     }
 
     let inject_headers: HeaderMap = compute_injected_headers(&headers, inject_request_headers);
     info!("Injected headers length = {}", inject_headers.len());
     for (key, value) in &inject_headers {
-        info!("{}: {}", key, value.to_str().unwrap());
+        info!("    {}: {}", key, value.to_str().unwrap());
     }
 
     let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
@@ -328,7 +329,7 @@ async fn score(
                     .any(|h| h.eq_ignore_ascii_case(key.as_str()))
                 {
                     info!(
-                        "{}: {}",
+                        "    {}: {}",
                         key,
                         std::str::from_utf8(value.as_bytes()).unwrap()
                     );
