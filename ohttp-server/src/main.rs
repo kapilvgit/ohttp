@@ -225,8 +225,10 @@ async fn generate_reply(
     };
 
     // Copy headers from the encapsulated request
-    info!("Inner request headers");
+    info!("Creating inner request headers");
     let mut headers = HeaderMap::new();
+
+    info!("Appending multi-form fields");
     for field in bin_request.header().fields() {
         info!(
             "{}: {}",
@@ -240,8 +242,8 @@ async fn generate_reply(
         );
     }
 
+    info!("Appending injected headers");
     // Inject additional headers from the outer request
-    info!("Inner request injected headers");
     for (key, value) in inject_headers {
         if let Some(key) = key {
             info!("{}: {}", key.as_str(), value.to_str().unwrap());
@@ -291,12 +293,26 @@ async fn score(
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     info!("Received encapsulated score request for target {}", target);
-    info!("Request headers");
+
+    info!("Request headers length = {}", headers.len());
     for (key, value) in &headers {
         info!("{}: {}", key, value.to_str().unwrap());
     }
 
-    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    info!(
+        "Request inject headers length = {}",
+        inject_request_headers.len()
+    );
+    for key in &inject_request_headers {
+        info!("{}", key);
+    }
+
+    let inject_headers: HeaderMap = compute_injected_headers(&headers, inject_request_headers);
+    info!("Injected headers length = {}", inject_headers.len());
+    for (key, value) in &inject_headers {
+        info!("{}: {}", key, value.to_str().unwrap());
+    }
+
     let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
 
     match reply.await {
