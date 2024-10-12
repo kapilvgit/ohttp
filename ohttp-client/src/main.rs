@@ -1,7 +1,7 @@
 use bhttp::{Message, Mode};
 use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
-use log::{info, trace};
+use log::{error, info, trace};
 use ohttp::ClientRequest;
 use reqwest::{header::AUTHORIZATION, Client};
 use serde::Deserialize;
@@ -90,8 +90,8 @@ struct Args {
 // Create a multi-part request from a file
 fn create_multipart_request(
     target_path: &str,
-    headers: Option<Vec<String>>,
-    fields: Option<Vec<String>>,
+    headers: &Option<Vec<String>>,
+    fields: &Option<Vec<String>>,
 ) -> Res<Vec<u8>> {
     // Define boundary for multipart
     let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
@@ -102,7 +102,7 @@ fn create_multipart_request(
     if let Some(headers) = headers {
         for header in headers {
             write!(&mut request, "{header}\r\n")?;
-            info!("{header}\r\n");
+            trace!("{header}\r\n");
         }
     }
 
@@ -163,7 +163,9 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
         .error_for_status()?;
 
     let body = response.text().await?;
-    assert!(!body.is_empty());
+    if body.is_empty() {
+        return Err("Received empty response from KMS".into());
+    }
     Ok(body)
 }
 
@@ -192,48 +194,32 @@ pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
     Ok(ClientRequest::from_encoded_config(&encoded_config)?)
 }
 
-#[tokio::main]
-async fn main() -> Res<()> {
-    let args = Args::parse();
-    ::ohttp::init();
-    env_logger::try_init().unwrap();
-
-    trace!("================== STEP 1 ==================");
-
-    let request = {
-        let form_fields = args.form_fields.clone();
-        let headers = args.headers.clone();
-        let request = create_multipart_request(&args.target_path, headers, form_fields)?;
-        let mut cursor = Cursor::new(request);
-        if args.binary {
-            Message::read_bhttp(&mut cursor)?
-        } else {
-            Message::read_http(&mut cursor)?
-        }
+fn prepare_request_buf(args: &Args) -> Res<Vec<u8>> {
+    let request = create_multipart_request(&args.target_path, &args.headers, &args.form_fields)?;
+    let mut cursor = Cursor::new(request);
+    let request = if args.binary {
+        Message::read_bhttp(&mut cursor)?
+    } else {
+        Message::read_http(&mut cursor)?
     };
 
     let mut request_buf = Vec::new();
     request.write_bhttp(Mode::KnownLength, &mut request_buf)?;
+    Ok(request_buf)
+}
 
-    let ohttp_request = if let Some(kms_cert) = &args.kms_cert {
+async fn prepare_ohttp_request(args: &Args) -> Res<ohttp::ClientRequest> {
+    if let Some(kms_cert) = &args.kms_cert {
         let cert = fs::read_to_string(kms_cert)?;
         let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
         let config = get_kms_config(kms_url.to_string(), &cert).await?;
-        from_kms_config(&config, &cert)?
+        from_kms_config(&config, &cert)
     } else {
         let config = &args.config.clone().expect("Config expected.");
-        ohttp::ClientRequest::from_encoded_config_list(config)?
-    };
-
-    trace!("================== STEP 2 ==================");
-
-    let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    info!(
-        "Sending encrypted OHTTP request to {}: {}",
-        args.url,
-        hex::encode(&enc_request[0..60])
-    );
-
+        Ok(ohttp::ClientRequest::from_encoded_config_list(config)?)
+    }
+}
+async fn send_request(args: &Args, enc_request: Vec<u8>) -> Res<reqwest::Response> {
     let client = reqwest::ClientBuilder::new().build()?;
 
     let tokenstr = args.token.as_ref().map_or("None", |s| s.as_str());
@@ -244,30 +230,33 @@ async fn main() -> Res<()> {
         .header(AUTHORIZATION, format!("Bearer {tokenstr}"));
 
     // Add outer headers
-    info!("Outer request headers:");
+    trace!("Outer request headers:");
     let outer_headers = args.outer_headers.clone();
     if let Some(headers) = outer_headers {
         for header in headers {
             let (key, value) = header.split_once(':').unwrap();
-            info!("Adding {key}: {value}");
+            trace!("Adding {key}: {value}");
             builder = builder.header(key, value);
         }
     }
 
     let response = builder.body(enc_request).send().await?.error_for_status()?;
+    Ok(response)
+}
 
-    info!("response status: {}\n", response.status());
-    info!("Response headers:");
-    for (key, value) in response.headers() {
-        info!(
-            "{}: {}",
-            key,
-            std::str::from_utf8(value.as_bytes()).unwrap()
-        );
-    }
-
+async fn handle_response(
+    response: reqwest::Response,
+    client_response: ohttp::ClientResponse,
+    args: &Args,
+) -> Res<()> {
     let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
-        Box::new(File::open(outfile)?)
+        match File::create(outfile) {
+            Ok(file) => Box::new(file),
+            Err(e) => {
+                eprintln!("Error opening output file: {}", e);
+                return Err(Box::new(e));
+            }
+        }
     } else {
         Box::new(std::io::stdout())
     };
@@ -291,5 +280,72 @@ async fn main() -> Res<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Res<()> {
+    ::ohttp::init();
+    env_logger::try_init().unwrap();
+    trace!("Initialized client");
+
+    let args = Args::parse();
+    let request_buf = match prepare_request_buf(&args) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Error preparing request: {}", e);
+            return Err(e);
+        }
+    };
+    trace!("Prepared the request buffer");
+
+    let ohttp_request = match prepare_ohttp_request(&args).await {
+        Ok(request) => request,
+        Err(e) => {
+            eprintln!("Error preparing OHTTP request: {}", e);
+            return Err(e);
+        }
+    };
+    trace!("Prepared the ohttp request");
+
+    let (enc_request, client_response) = match ohttp_request.encapsulate(&request_buf) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("Error encapsulating request: {}", e);
+            return Err(Box::new(e));
+        }
+    };
+    trace!(
+        "Encapsulated the OHTTP request to be sent to {}: {}",
+        args.url,
+        hex::encode(&enc_request[0..60])
+    );
+
+    let response = match send_request(&args, enc_request).await {
+        Ok(response) => response,
+        Err(e) => {
+            eprintln!("Error sending request: {}", e);
+            return Err(e);
+        }
+    };
+    trace!("response status: {}\n", response.status());
+    trace!("Response headers:");
+    for (key, value) in response.headers() {
+        trace!(
+            "{}: {}",
+            key,
+            std::str::from_utf8(value.as_bytes()).unwrap()
+        );
+    }
+
+    match handle_response(response, client_response, &args).await {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error handling response: {}", e);
+            return Err(e);
+        }
+    }
+
     Ok(())
 }

@@ -360,9 +360,25 @@ fn with_ohttp(
     warp::any().map(move || Arc::clone(&ohttp))
 }
 
+async fn get_key_config(args: &Args) -> Res<KeyConfig> {
+    if args.attest {
+        let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
+        let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
+        import_config(maa_url, kms_url).await
+    } else {
+        Ok(KeyConfig::new(
+            0,
+            Kem::X25519Sha256,
+            vec![
+                SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
+                SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
+            ],
+        )?)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Res<()> {
-    let args = Args::parse();
     ::ohttp::init();
 
     // Build a simple subscriber that outputs to stdout
@@ -374,23 +390,23 @@ async fn main() -> Res<()> {
     // Set the subscriber as global default
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let config = if args.attest {
-        let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
-        let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
-        import_config(maa_url, kms_url).await?
-    } else {
-        KeyConfig::new(
-            0,
-            Kem::X25519Sha256,
-            vec![
-                SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
-                SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
-            ],
-        )?
+    let args = Args::parse();
+    let config = match get_key_config(&args).await {
+        Ok(config) => config,
+        Err(e) => {
+            error!("Failed to get key config: {}", e);
+            return Err(e);
+        }
     };
 
-    let ohttp = OhttpServer::new(config)?;
-    let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()])?);
+    let ohttp = OhttpServer::new(config).map_err(|e| {
+        error!("Failed to create OHTTP server: {}", e);
+        e
+    })?;
+    let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()]).map_err(|e| {
+        error!("Failed to encode key config: {}", e);
+        e
+    })?);
     trace!("Config: {}", config);
 
     let mode = args.mode();
