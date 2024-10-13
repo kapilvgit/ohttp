@@ -208,7 +208,7 @@ fn create_multipart_request(
 }
 
 /// Prepares a http message based on the `is_bhttp` flag and other parameters.
-fn prepare_http_request(
+fn create_request_buffer(
     is_bhttp: bool,
     target_path: &String,
     headers: &Option<Vec<String>>,
@@ -262,72 +262,64 @@ struct KmsKeyConfiguration {
 
 /// Reads a json containing key configurations with receipts and constructs
 /// a single use client sender from the first supported configuration.
-pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
+pub fn create_request_from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
     let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
+
     let kms_config = match kms_configs.pop() {
         Some(config) => config,
         None => return Err("No KMS configuration found".into()),
     };
+
     info!("{}", "Establishing trust in key management service...");
     let _ = verifier::verify(&kms_config.receipt, cert)?;
     info!(
         "{}",
         "The receipt for the generation of the OHTTP key is valid."
     );
+
     let encoded_config = hex::decode(&kms_config.key_config)?;
     Ok(ClientRequest::from_encoded_config(&encoded_config)?)
 }
 
-/// Creates an OHTTP client request based on the provided arguments.
+/// Creates an OHTTP client from the static config provided in Args.
 ///
-/// This asynchronous function constructs an `ohttp::ClientRequest` by either
-/// fetching and validating a KMS configuration or using a predefined configuration.
-/// If a KMS certificate is provided, it reads the certificate, retrieves the KMS URL,
-/// fetches the KMS configuration, and validates it. If no KMS certificate is provided,
-/// it uses the encoded configuration list from the arguments.
-///
-/// # Arguments
-///
-/// * `args` - A reference to an `Args` struct containing the necessary parameters.
-///
-/// # Returns
-///
-/// This function returns a `Res<ohttp::ClientRequest>`, which is a type alias for
-/// `Result<ohttp::ClientRequest, Box<dyn std::error::Error>>`. It returns an
-/// `ohttp::ClientRequest` if successful, or an error if any operation fails.
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// - The KMS certificate cannot be read.
-/// - The KMS configuration cannot be fetched or validated.
-/// - The encoded configuration list is missing or invalid.
-///
-async fn create_ohttp_client_request(args: &Args) -> Res<ohttp::ClientRequest> {
-    if let Some(kms_cert) = &args.kms_cert {
-        let cert = fs::read_to_string(kms_cert)?;
-        let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
-        let config = get_kms_config(kms_url.to_string(), &cert).await?;
-        from_kms_config(&config, &cert)
-    } else {
-        let config = &args.config.clone().expect("Config expected.");
-        Ok(ohttp::ClientRequest::from_encoded_config_list(config)?)
-    }
+fn create_request_handler(config: &Option<HexArg>) -> Res<ohttp::ClientRequest> {
+    let config = config.clone().expect("Config expected.");
+    Ok(ohttp::ClientRequest::from_encoded_config_list(&config)?)
 }
 
-async fn send_request(args: &Args, enc_request: Vec<u8>) -> Res<reqwest::Response> {
+/// Creates an OHTTP client from KMS.
+///
+async fn create_request_handler_from_kms(
+    kms_cert: &PathBuf,
+    kms_url: &Option<String>,
+) -> Res<ohttp::ClientRequest> {
+    let cert = fs::read_to_string(kms_cert)?;
+    let url = kms_url
+        .clone()
+        .unwrap_or_else(|| DEFAULT_KMS_URL.to_string());
+    let config = get_kms_config(url.to_string(), &cert).await?;
+    create_request_from_kms_config(&config, &cert)
+}
+
+async fn post_request(
+    url: &String,
+    outer_headers: &Option<Vec<String>>,
+    token: &Option<String>,
+    enc_request: Vec<u8>,
+) -> Res<reqwest::Response> {
     let client = reqwest::ClientBuilder::new().build()?;
 
-    let tokenstr = args.token.as_ref().map_or("None", |s| s.as_str());
+    let tokenstr = token.as_ref().map_or("None", |s| s.as_str());
 
     let mut builder = client
-        .post(&args.url)
+        .post(url)
         .header("content-type", "message/ohttp-chunked-req")
         .header(AUTHORIZATION, format!("Bearer {tokenstr}"));
 
     // Add outer headers
     trace!("Outer request headers:");
-    let outer_headers = args.outer_headers.clone();
+    let outer_headers = outer_headers.clone();
     if let Some(headers) = outer_headers {
         for header in headers {
             let (key, value) = header.split_once(':').unwrap();
@@ -346,15 +338,18 @@ async fn send_request(args: &Args, enc_request: Vec<u8>) -> Res<reqwest::Respons
             std::str::from_utf8(value.as_bytes()).unwrap()
         );
     }
+
     Ok(response)
 }
 
+/// Decapsulate the http response
+/// The response can be saved to a file or printed to stdout, based on the value of args.output 
 async fn handle_response(
     response: reqwest::Response,
     client_response: ohttp::ClientResponse,
-    args: &Args,
+    output: &Option<PathBuf>,
 ) -> Res<()> {
-    let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
+    let mut output: Box<dyn io::Write> = if let Some(outfile) = output {
         match File::create(outfile) {
             Ok(file) => Box::new(file),
             Err(e) => {
@@ -395,8 +390,8 @@ async fn main() -> Res<()> {
 
     let args = Args::parse();
 
-    //  Prepare http request buffer
-    let request = match prepare_http_request(
+    //  Create ohttp request buffer
+    let request_buffer = match create_request_buffer(
         args.binary,
         &args.target_path,
         &args.headers,
@@ -408,19 +403,25 @@ async fn main() -> Res<()> {
             return Err(e);
         }
     };
-    trace!("Prepared the request buffer");
+    trace!("Created the ohttp request buffer");
 
-    // Create ohttp client request
-    let ohttp_request = match create_ohttp_client_request(&args).await {
+    //  create the OHTTP request handler using the KMS or the static config file
+    let result = if let Some(kms_cert) = &args.kms_cert {
+        create_request_handler_from_kms(kms_cert, &args.kms_url).await
+    } else {
+        create_request_handler(&args.config)
+    };
+    let request_handler = match result {
         Ok(request) => request,
         Err(e) => {
             error!("Error preparing OHTTP request: {}", e);
             return Err(e);
         }
     };
-    trace!("Created ohttp client request");
+    trace!("Created ohttp client request handler");
 
-    let (enc_request, client_response) = match ohttp_request.encapsulate(&request) {
+    // Encapsulate the http buffer using the OHTTP request 
+    let (enc_request, response_handler) = match request_handler.encapsulate(&request_buffer) {
         Ok(result) => result,
         Err(e) => {
             error!("Error encapsulating request: {}", e);
@@ -428,25 +429,28 @@ async fn main() -> Res<()> {
         }
     };
     trace!(
-        "Encapsulated the OHTTP request to be sent to {}: {}",
-        args.url,
+        "Encapsulated the OHTTP request {}",
         hex::encode(&enc_request[0..60])
     );
 
-    let response = match send_request(&args, enc_request).await {
-        Ok(response) => response,
-        Err(e) => {
-            error!("Error sending request: {}", e);
-            return Err(e);
-        }
-    };
+    // Post the encapsulated ohttp request buffer to args.url
+    let response =
+        match post_request(&args.url, &args.outer_headers, &args.token, enc_request).await {
+            Ok(response) => response,
+            Err(e) => {
+                error!("Error sending request: {}", e);
+                return Err(e);
+            }
+        };
+    trace!(
+        "Posted the OHTTP request to {}",
+        args.url
+    );
 
-    match handle_response(response, client_response, &args).await {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Error handling response: {}", e);
-            return Err(e);
-        }
+    // decapsulate and output the http response
+    if let Err(e) = handle_response(response, response_handler, &args.output).await {
+        error!("Error handling response: {}", e);
+        return Err(e);
     }
 
     Ok(())
