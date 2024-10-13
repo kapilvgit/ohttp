@@ -31,7 +31,6 @@ use hpke::Deserializable;
 use serde::Deserialize;
 
 use tracing::{error, info, trace};
-use tracing_subscriber::FmtSubscriber;
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -89,7 +88,7 @@ impl Args {
 async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
     // Get MAA token from CVM guest attestation library
     let Some(tok) = attest("{}".as_bytes(), 0xffff, maa) else {
-        panic!("Failed to get MAA token. You must be root to access TPM.")
+        return Err("Failed to get MAA token. You must be root to access TPM.".into());
     };
     let token = String::from_utf8(tok).unwrap();
     info!("Fetched MAA token");
@@ -124,7 +123,9 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                 );
                 sleep(Duration::from_secs(1)).await;
             } else {
-                panic!("Max retries reached, giving up. Cannot reach key management service");
+                return Err(
+                    "Max retries reached, giving up. Cannot reach key management service".into(),
+                );
             }
         } else {
             let skr_body = response.text().await?;
@@ -151,7 +152,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                         if let Value::Integer(k) = value {
                             kid = u8::try_from(k).unwrap();
                         } else {
-                            panic!("Bad KID");
+                            return Err("Bad KID".into());
                         }
                     }
 
@@ -160,7 +161,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                         if let Value::Bytes(vec) = value {
                             d = Some(vec);
                         } else {
-                            panic!("Invalid private key");
+                            return Err("Invalid private key".into());
                         }
                     }
 
@@ -168,19 +169,19 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                     -1 => {
                         if value == Value::Integer(2) {
                         } else {
-                            panic!("Bad CBOR key type, expected P-384(2)");
+                            return Err("Bad CBOR key type, expected P-384(2)".into());
                         }
                     }
 
                     // Ignore public key (x,y) as we recompute it from d anyway
                     -2 | -3 => (),
 
-                    _ => panic!("Unexpected field in exported private key from KMS"),
+                    _ => return Err("Unexpected field in exported private key from KMS".into()),
                 };
             };
         }
     } else {
-        panic!("Incorrect CBOR encoding in returned private key");
+        return Err("Incorrect CBOR encoding in returned private key".into());
     };
 
     let (sk, pk) = if let Some(key) = d {
@@ -189,7 +190,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
         let p = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&s);
         (s, p)
     } else {
-        panic!("Missing private exponent in key returned from KMS");
+        return Err("Missing private exponent in key returned from KMS".into());
     };
 
     let config = KeyConfig::import_p384(
@@ -225,11 +226,11 @@ async fn generate_reply(
     };
 
     // Copy headers from the encapsulated request
-    info!("Inner request headers");
+    info!("Creating inner request headers");
     let mut headers = HeaderMap::new();
     for field in bin_request.header().fields() {
         info!(
-            "{}: {}",
+            "    {}: {}",
             std::str::from_utf8(field.name()).unwrap(),
             std::str::from_utf8(field.value()).unwrap()
         );
@@ -241,10 +242,12 @@ async fn generate_reply(
     }
 
     // Inject additional headers from the outer request
-    info!("Inner request injected headers");
+    if inject_headers.len() > 0 {
+        info!("Appending injected headers")
+    };
     for (key, value) in inject_headers {
         if let Some(key) = key {
-            info!("{}: {}", key.as_str(), value.to_str().unwrap());
+            info!("    {}: {}", key.as_str(), value.to_str().unwrap());
             headers.append(key, value);
         }
     }
@@ -291,12 +294,25 @@ async fn score(
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     info!("Received encapsulated score request for target {}", target);
-    info!("Request headers");
+    info!("Request headers length = {}", headers.len());
     for (key, value) in &headers {
-        info!("{}: {}", key, value.to_str().unwrap());
+        info!("    {}: {}", key, value.to_str().unwrap());
     }
 
-    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    info!(
+        "Request inject headers length = {}",
+        inject_request_headers.len()
+    );
+    for key in &inject_request_headers {
+        info!("    {}", key);
+    }
+
+    let inject_headers: HeaderMap = compute_injected_headers(&headers, inject_request_headers);
+    info!("Injected headers length = {}", inject_headers.len());
+    for (key, value) in &inject_headers {
+        info!("    {}: {}", key, value.to_str().unwrap());
+    }
+
     let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
 
     match reply.await {
@@ -312,7 +328,7 @@ async fn score(
                     .any(|h| h.eq_ignore_ascii_case(key.as_str()))
                 {
                     info!(
-                        "{}: {}",
+                        "    {}: {}",
                         key,
                         std::str::from_utf8(value.as_bytes()).unwrap()
                     );
@@ -380,15 +396,6 @@ async fn get_key_config(args: &Args) -> Res<KeyConfig> {
 #[tokio::main]
 async fn main() -> Res<()> {
     ::ohttp::init();
-
-    // Build a simple subscriber that outputs to stdout
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::INFO)
-        .json()
-        .finish();
-
-    // Set the subscriber as global default
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let args = Args::parse();
     let config = match get_key_config(&args).await {

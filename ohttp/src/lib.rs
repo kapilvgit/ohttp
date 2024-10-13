@@ -54,6 +54,8 @@ use crate::rh::{
     hpke::{Config as HpkeConfig, Exporter, HpkeR, HpkeS},
 };
 
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
 /// The request header is a `KeyId` and 2 each for KEM, KDF, and AEAD identifiers
 const REQUEST_HEADER_LEN: usize = size_of::<KeyId>() + 6;
 const INFO_REQUEST: &[u8] = b"message/bhttp request";
@@ -69,6 +71,17 @@ pub type KeyId = u8;
 pub fn init() {
     #[cfg(feature = "nss")]
     nss::init();
+
+    // Build a simple subscriber that outputs to stdout
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_file(true)
+        .with_line_number(true)
+        .json()
+        .finish();
+
+    // Set the subscriber as global default
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 }
 
 /// Construct the info parameter we use to initialize an `HpkeS` instance.
@@ -818,7 +831,7 @@ mod test {
 
         let merged_response = enc_response.chunks(2).map(|chunk| {
             if chunk.len() == 2 {
-                println!("Found too elements");
+                info!("Found too elements");
                 let mut first = chunk[0].as_ref().unwrap().clone();
                 let second = chunk[1].as_ref().unwrap();
                 first.append(&mut second.clone());
