@@ -261,7 +261,7 @@ struct KmsKeyConfiguration {
 
 /// Reads a json containing key configurations with receipts and constructs
 /// a single use client sender from the first supported configuration.
-pub fn create_request_from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
+pub fn create_ohttp_request_from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
     let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
 
     let kms_config = match kms_configs.pop() {
@@ -282,14 +282,14 @@ pub fn create_request_from_kms_config(config: &str, cert: &str) -> Res<ClientReq
 
 /// Creates an OHTTP client from the static config provided in Args.
 ///
-fn create_request_handler(config: &Option<HexArg>) -> Res<ohttp::ClientRequest> {
+fn create_ohttp_request(config: &Option<HexArg>) -> Res<ohttp::ClientRequest> {
     let config = config.clone().expect("Config expected.");
     Ok(ohttp::ClientRequest::from_encoded_config_list(&config)?)
 }
 
 /// Creates an OHTTP client from KMS.
 ///
-async fn create_request_handler_from_kms(
+async fn create_ohttp_request_from_kms(
     kms_cert: &PathBuf,
     kms_url: &Option<String>,
 ) -> Res<ohttp::ClientRequest> {
@@ -298,7 +298,7 @@ async fn create_request_handler_from_kms(
         .clone()
         .unwrap_or_else(|| DEFAULT_KMS_URL.to_string());
     let config = get_kms_config(url.to_string(), &cert).await?;
-    create_request_from_kms_config(&config, &cert)
+    create_ohttp_request_from_kms_config(&config, &cert)
 }
 
 async fn post_request(
@@ -401,7 +401,7 @@ async fn main() -> Res<()> {
     let args = Args::parse();
 
     //  Create ohttp request buffer
-    let request_buffer = match create_request_buffer(
+    let request_buf = match create_request_buffer(
         args.binary,
         &args.target_path,
         &args.headers,
@@ -416,23 +416,23 @@ async fn main() -> Res<()> {
 
     trace!("Created the ohttp request buffer");
 
-    //  create the OHTTP request handler using the KMS or the static config file
+    //  create the OHTTP request using the KMS or the static config file
     let result = if let Some(kms_cert) = &args.kms_cert {
-        create_request_handler_from_kms(kms_cert, &args.kms_url).await
+        create_ohttp_request_from_kms(kms_cert, &args.kms_url).await
     } else {
-        create_request_handler(&args.config)
+        create_ohttp_request(&args.config)
     };
-    let request_handler = match result {
+    let ohttp_request = match result {
         Ok(request) => request,
         Err(e) => {
             error!("{e}");
             return Err(e);
         }
     };
-    trace!("Created ohttp client request handler");
+    trace!("Created ohttp client request");
 
     // Encapsulate the http buffer using the OHTTP request
-    let (enc_request, response_handler) = match request_handler.encapsulate(&request_buffer) {
+    let (enc_request, ohttp_response) = match ohttp_request.encapsulate(&request_buf) {
         Ok(result) => result,
         Err(e) => {
             error!("{e}");
@@ -456,7 +456,7 @@ async fn main() -> Res<()> {
     trace!("Posted the OHTTP request to {}", args.url);
 
     // decapsulate and output the http response
-    if let Err(e) = handle_response(response, response_handler, &args.output).await {
+    if let Err(e) = handle_response(response, ohttp_response, &args.output).await {
         error!("{e}");
         return Err(e);
     }

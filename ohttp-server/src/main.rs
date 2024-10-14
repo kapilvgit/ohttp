@@ -241,7 +241,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
 
 /// Copies headers from the encapsulated request and logs them.
 ///
-fn copy_headers_from_request(bin_request: &Message) -> HeaderMap {
+fn get_headers_from_request(bin_request: &Message) -> HeaderMap {
     info!("Inner request headers");
     let mut headers = HeaderMap::new();
     for field in bin_request.header().fields() {
@@ -271,7 +271,7 @@ async fn generate_reply(
     let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
 
     // Copy headers from the encapsulated request
-    let mut headers = copy_headers_from_request(&bin_request);
+    let mut headers = get_headers_from_request(&bin_request);
 
     // Inject additional headers from the outer request
     if !inject_headers.is_empty() {
