@@ -87,7 +87,7 @@ impl Args {
 
 /// Fetches the MAA token from the CVM guest attestation library.
 ///
-async fn fetch_maa_token(maa: &str) -> Res<String> {
+fn fetch_maa_token(maa: &str) -> Res<String> {
     let Some(tok) = attest("{}".as_bytes(), 0xffff, maa) else {
         error!("{}", Error::MAAToken);
         return Err(Box::new(Error::MAAToken));
@@ -200,7 +200,7 @@ fn parse_cbor_key(key: &str) -> Res<(u8, Option<Vec<u8>>)> {
 
 async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
     // Fetch MAA token
-    let token = fetch_maa_token(maa).await?;
+    let token = fetch_maa_token(maa)?;
 
     // Get HPKE private key from Azure KMS
     let client = Client::builder()
@@ -273,7 +273,7 @@ async fn generate_reply(
     let mut headers = copy_headers_from_request(&bin_request);
 
     // Inject additional headers from the outer request
-    if inject_headers.len() > 0 {
+    if !inject_headers.is_empty() {
         info!("Appending injected headers");
         for (key, value) in inject_headers {
             if let Some(key) = key {
