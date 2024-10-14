@@ -330,7 +330,7 @@ impl ServerResponse {
         let response_nonce = Ok(self.response_nonce.clone());
         info!(
             "Response nonce {}({})",
-            hex::encode(&self.response_nonce.clone()),
+            hex::encode(self.response_nonce.clone()),
             self.response_nonce.len()
         );
         let nonce_stream = once(async { response_nonce });
@@ -831,7 +831,7 @@ mod test {
 
         let merged_response = enc_response.chunks(2).map(|chunk| {
             if chunk.len() == 2 {
-                info!("Found too elements");
+                println!("Found too elements");
                 let mut first = chunk[0].as_ref().unwrap().clone();
                 let second = chunk[1].as_ref().unwrap();
                 first.append(&mut second.clone());

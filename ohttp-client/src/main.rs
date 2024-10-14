@@ -210,7 +210,7 @@ fn create_multipart_request(
 /// Prepares a http message based on the `is_bhttp` flag and other parameters.
 fn create_request_buffer(
     is_bhttp: bool,
-    target_path: &String,
+    target_path: &str,
     headers: &Option<Vec<String>>,
     form_fields: &Option<Vec<String>>,
 ) -> Res<Vec<u8>> {
