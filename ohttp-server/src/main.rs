@@ -25,6 +25,7 @@ use reqwest::Client;
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 use serde_cbor::Value;
+use serde_json::from_str;
 
 use hpke::Deserializable;
 use serde::Deserialize;
@@ -106,11 +107,11 @@ async fn get_hpke_private_key_from_kms(client: &Client, kms: &str, token: &str) 
         // Send request to KMS
         let response = client
             .post(kms)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
 
-        // Handle 202 status code (retry logic)
+        // We may have to wait for receipt to be ready
         if response.status() == 202 {
             if retries < max_retries {
                 retries += 1;
@@ -127,8 +128,8 @@ async fn get_hpke_private_key_from_kms(client: &Client, kms: &str, token: &str) 
         } else {
             // Process successful response
             let skr_body = response.text().await?;
-            let skr: ExportedKey = serde_json::from_str(&skr_body)
-                .expect("Failed to deserialize SKR response. Check KMS version");
+            let skr: ExportedKey =
+                from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
 
             info!("SKR successful");
             trace!("KID={}, Receipt={}", skr.kid, skr.receipt);
@@ -319,7 +320,6 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
     }
     result
 }
-
 
 #[allow(clippy::unused_async)]
 async fn score(
