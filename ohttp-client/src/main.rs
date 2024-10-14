@@ -156,10 +156,10 @@ fn create_multipart_body(fields: &Option<Vec<String>>, boundary: &str) -> Res<Ve
     Ok(body)
 }
 
-/// Writes the headers for a multipart/form-data HTTP request to the provided buffer.
+/// Append the headers for a multipart/form-data HTTP request to the provided buffer.
 ///      Content-Type: multipart/form-data; boundary=---------------------------boundaryString
 ///      Content-Length: 12345
-fn write_multipart_headers(request: &mut Vec<u8>, boundary: &str, body_len: usize) -> Res<()> {
+fn append_multipart_headers(request: &mut Vec<u8>, boundary: &str, body_len: usize) -> Res<()> {
     write!(
         request,
         "Content-Type: multipart/form-data; boundary={boundary}\r\n"
@@ -200,7 +200,7 @@ fn create_multipart_request(
     let mut body = create_multipart_body(fields, boundary)?;
 
     // Append multipart headers
-    write_multipart_headers(&mut request, boundary, body.len())?;
+    append_multipart_headers(&mut request, boundary, body.len())?;
 
     // Append body to the request
     request.append(&mut body);
@@ -218,8 +218,6 @@ fn create_request_buffer(
     let request = create_multipart_request(target_path, headers, form_fields)?;
     let mut cursor = Cursor::new(request);
 
-    // If `is_bhttp` is `true`, it reads a BHTTP message using `Message::read_bhttp`.
-    //  Otherwise, it reads a standard HTTP message using `Message::read_http`.
     let request = if is_bhttp {
         Message::read_bhttp(&mut cursor)?
     } else {
@@ -261,35 +259,40 @@ struct KmsKeyConfiguration {
 
 /// Reads a json containing key configurations with receipts and constructs
 /// a single use client sender from the first supported configuration.
-pub fn create_ohttp_request_from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
-    let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
+trait ClientRequestBuilder {
+    fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest>;
+}
 
-    let kms_config = match kms_configs.pop() {
-        Some(config) => config,
-        None => return Err("No KMS configuration found".into()),
-    };
-
-    info!("{}", "Establishing trust in key management service...");
-    let _ = verifier::verify(&kms_config.receipt, cert)?;
-    info!(
-        "{}",
-        "The receipt for the generation of the OHTTP key is valid."
-    );
-
-    let encoded_config = hex::decode(&kms_config.key_config)?;
-    Ok(ClientRequest::from_encoded_config(&encoded_config)?)
+impl ClientRequestBuilder for ClientRequest {
+    /// Reads a json containing key configurations with receipts and constructs
+    /// a single use client sender from the first supported configuration.
+    fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
+        let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
+        let kms_config = match kms_configs.pop() {
+            Some(config) => config,
+            None => return Err("No KMS configuration found".into()),
+        };
+        info!("{}", "Establishing trust in key management service...");
+        let _ = verifier::verify(&kms_config.receipt, cert)?;
+        info!(
+            "{}",
+            "The receipt for the generation of the OHTTP key is valid."
+        );
+        let encoded_config = hex::decode(&kms_config.key_config)?;
+        Ok(ClientRequest::from_encoded_config(&encoded_config)?)
+    }
 }
 
 /// Creates an OHTTP client from the static config provided in Args.
 ///
-fn create_ohttp_request(config: &Option<HexArg>) -> Res<ohttp::ClientRequest> {
+fn create_request_from_encoded_config_list(config: &Option<HexArg>) -> Res<ohttp::ClientRequest> {
     let config = config.clone().expect("Config expected.");
     Ok(ohttp::ClientRequest::from_encoded_config_list(&config)?)
 }
 
 /// Creates an OHTTP client from KMS.
 ///
-async fn create_ohttp_request_from_kms(
+async fn create_request_from_kms_config(
     kms_cert: &PathBuf,
     kms_url: &Option<String>,
 ) -> Res<ohttp::ClientRequest> {
@@ -298,7 +301,7 @@ async fn create_ohttp_request_from_kms(
         .clone()
         .unwrap_or_else(|| DEFAULT_KMS_URL.to_string());
     let config = get_kms_config(url.to_string(), &cert).await?;
-    create_ohttp_request_from_kms_config(&config, &cert)
+    ClientRequest::from_kms_config(&config, &cert)
 }
 
 async fn post_request(
@@ -418,9 +421,9 @@ async fn main() -> Res<()> {
 
     //  create the OHTTP request using the KMS or the static config file
     let result = if let Some(kms_cert) = &args.kms_cert {
-        create_ohttp_request_from_kms(kms_cert, &args.kms_url).await
+        create_request_from_kms_config(kms_cert, &args.kms_url).await
     } else {
-        create_ohttp_request(&args.config)
+        create_request_from_encoded_config_list(&args.config)
     };
     let ohttp_request = match result {
         Ok(request) => request,
