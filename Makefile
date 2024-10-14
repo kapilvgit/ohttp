@@ -21,6 +21,7 @@ else
 endif
 	
 INPUT ?= ./examples/audio.mp3
+INJECT_HEADERS ?= openai-internal-enableasrsupport
 
 build-whisper:
 	docker build -f docker/whisper/Dockerfile -t whisper-api ./docker/whisper
@@ -48,7 +49,7 @@ run-server-container:
 	docker compose -f ./docker/docker-compose-server.yml up
 
 run-server-container-attest: 
-	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
 
 run-whisper:
 	docker run --network=host whisper-api 
@@ -84,16 +85,21 @@ run-client-local:
 run-client-kms-aoai-local: service-cert 
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  --kms-cert ./service_cert.pem 
-  -H 'openai-internal-enableasrsupport:true'
+  --kms-cert ./service_cert.pem \
+  -O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
 
 run-client-kms-aoai: service-cert 
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
   --kms-cert ./service_cert.pem \
-  -H 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
+  -H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
 
 run-client-container:
-	docker run --privileged --net=host -e TARGET=${TARGET} \
+	docker run --privileged --net=host -e TARGET=${SCORING_ENDPOINT} \
 	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
 	-e INPUT=${INPUT} ohttp-client
+
+run-client-container-it:
+	docker run -it --privileged --net=host -e TARGET=${SCORING_ENDPOINT} \
+	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
+	-e INPUT=${INPUT} ohttp-client bash

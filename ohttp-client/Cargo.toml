@@ -22,6 +22,7 @@ futures-util = "0.3.30"
 futures = "0.3.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tracing = "0.1"
 
 [dependencies.verifier]
 path= "../verifier"

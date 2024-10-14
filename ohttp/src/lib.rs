@@ -547,8 +547,8 @@ mod test {
     };
 
     use futures::StreamExt;
-    use log::trace;
     use std::{fmt::Debug, io::ErrorKind};
+    use tracing::trace;
 
     use async_stream::stream;
     const KEY_ID: KeyId = 1;

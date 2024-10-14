@@ -1,7 +1,6 @@
 use bhttp::{Message, Mode};
 use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
-use log::{error, info, trace};
 use ohttp::ClientRequest;
 use reqwest::{header::AUTHORIZATION, Client};
 use serde::Deserialize;
@@ -12,6 +11,7 @@ use std::{
     path::PathBuf,
     str::FromStr,
 };
+use tracing::{error, info, trace};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -247,9 +247,7 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
         .error_for_status()?;
 
     let body = response.text().await?;
-    if body.is_empty() {
-        return Err("Received empty response from KMS".into());
-    }
+    assert!(!body.is_empty());
     Ok(body)
 }
 
@@ -343,7 +341,7 @@ async fn post_request(
 }
 
 /// Decapsulate the http response
-/// The response can be saved to a file or printed to stdout, based on the value of args.output 
+/// The response can be saved to a file or printed to stdout, based on the value of args.output
 async fn handle_response(
     response: reqwest::Response,
     client_response: ohttp::ClientResponse,
@@ -399,10 +397,11 @@ async fn main() -> Res<()> {
     ) {
         Ok(result) => result,
         Err(e) => {
-            error!("Error preparing request: {}", e);
+            error!("{e}");
             return Err(e);
         }
     };
+
     trace!("Created the ohttp request buffer");
 
     //  create the OHTTP request handler using the KMS or the static config file
@@ -414,17 +413,17 @@ async fn main() -> Res<()> {
     let request_handler = match result {
         Ok(request) => request,
         Err(e) => {
-            error!("Error preparing OHTTP request: {}", e);
+            error!("{e}");
             return Err(e);
         }
     };
     trace!("Created ohttp client request handler");
 
-    // Encapsulate the http buffer using the OHTTP request 
+    // Encapsulate the http buffer using the OHTTP request
     let (enc_request, response_handler) = match request_handler.encapsulate(&request_buffer) {
         Ok(result) => result,
         Err(e) => {
-            error!("Error encapsulating request: {}", e);
+            error!("{e}");
             return Err(Box::new(e));
         }
     };
@@ -438,18 +437,15 @@ async fn main() -> Res<()> {
         match post_request(&args.url, &args.outer_headers, &args.token, enc_request).await {
             Ok(response) => response,
             Err(e) => {
-                error!("Error sending request: {}", e);
+                error!("{e}");
                 return Err(e);
             }
         };
-    trace!(
-        "Posted the OHTTP request to {}",
-        args.url
-    );
+    trace!("Posted the OHTTP request to {}", args.url);
 
     // decapsulate and output the http response
     if let Err(e) = handle_response(response, response_handler, &args.output).await {
-        error!("Error handling response: {}", e);
+        error!("{e}");
         return Err(e);
     }
 
