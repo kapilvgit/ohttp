@@ -31,6 +31,7 @@ use hpke::Deserializable;
 use serde::Deserialize;
 
 use tracing::{error, info, trace};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -438,6 +439,17 @@ async fn get_key_config(
 
 #[tokio::main]
 async fn main() -> Res<()> {
+    // Build a simple subscriber that outputs to stdout
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_file(true)
+        .with_line_number(true)
+        .json()
+        .finish();
+
+    // Set the subscriber as global default
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
     ::ohttp::init();
 
     let args = Args::parse();

@@ -26,6 +26,7 @@ futures = "0.3.30"
 log = "0.4.22"
 clap = { version = "4.5.18", features = ["derive"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3.18", features = ["default", "json", "env-filter"] }
 
 [dependencies.bhttp]
 path= "../bhttp"
