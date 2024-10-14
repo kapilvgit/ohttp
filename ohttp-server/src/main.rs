@@ -13,7 +13,7 @@ use bhttp::{Message, Mode};
 use clap::Parser;
 use ohttp::{
     hpke::{Aead, Kdf, Kem},
-    KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
+    Error, KeyConfig, Server as OhttpServer, ServerResponse, SymmetricSuite,
 };
 use warp::{hyper::Body, Filter};
 
@@ -31,7 +31,7 @@ use hpke::Deserializable;
 use serde::Deserialize;
 
 use tracing::{error, info, trace};
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -86,27 +86,26 @@ impl Args {
     }
 }
 
-async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
-    // Get MAA token from CVM guest attestation library
+/// Fetches the MAA token from the CVM guest attestation library.
+///
+fn fetch_maa_token(maa: &str) -> Res<String> {
     let Some(tok) = attest("{}".as_bytes(), 0xffff, maa) else {
-        panic!("Failed to get MAA token. You must be root to access TPM.")
+        error!("{}", Error::MAAToken);
+        return Err(Box::new(Error::MAAToken));
     };
-    let token = String::from_utf8(tok).unwrap();
+    let token = String::from_utf8(tok)?;
     info!("Fetched MAA token");
     trace!("{token}");
+    Ok(token)
+}
 
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()?;
-
-    // Retrying logic for receipt
+/// Retrieves the HPKE private key from Azure KMS.
+///
+async fn get_hpke_private_key_from_kms(client: &Client, kms: &str, token: &str) -> Res<String> {
     let max_retries = 3;
     let mut retries = 0;
-    let key: String;
-    let mut kid: u8 = 0;
-
     loop {
-        // Get HPKE private key from Azure KMS
+        // Send request to KMS
         let response = client
             .post(kms)
             .header("Authorization", format!("Bearer {token}"))
@@ -124,21 +123,28 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                 );
                 sleep(Duration::from_secs(1)).await;
             } else {
-                panic!("Max retries reached, giving up. Cannot reach key management service");
+                error!("{}", Error::KMSUnreachable);
+                return Err(Box::new(Error::KMSUnreachable));
             }
         } else {
+            // Process successful response
             let skr_body = response.text().await?;
             let skr: ExportedKey =
                 from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
 
             info!("SKR successful");
             trace!("KID={}, Receipt={}", skr.kid, skr.receipt);
-            key = skr.key;
-            break;
+            return Ok(skr.key);
         }
     }
-    let cwk = hex::decode(&key).expect("Failed to decode hex key");
+}
+
+/// Parses a CBOR-encoded key from a hex-encoded string.
+///
+fn parse_cbor_key(key: &str) -> Res<(u8, Option<Vec<u8>>)> {
+    let cwk = hex::decode(key).expect("Failed to decode hex key");
     let cwk_map: Value = serde_cbor::from_slice(&cwk).expect("Invalid CBOR in key from KMS");
+    let mut kid = 0;
     let mut d = None;
 
     // Parse the returned CBOR key (in CWK-like format)
@@ -151,7 +157,8 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                         if let Value::Integer(k) = value {
                             kid = u8::try_from(k).unwrap();
                         } else {
-                            panic!("Bad KID");
+                            error!("{}", Error::KMSKeyId);
+                            return Err(Box::new(Error::KMSKeyId));
                         }
                     }
 
@@ -160,7 +167,8 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                         if let Value::Bytes(vec) = value {
                             d = Some(vec);
                         } else {
-                            panic!("Invalid private key");
+                            error!("{}", Error::KMSPrivateKey);
+                            return Err(Box::new(Error::KMSPrivateKey));
                         }
                     }
 
@@ -168,30 +176,54 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                     -1 => {
                         if value == Value::Integer(2) {
                         } else {
-                            panic!("Bad CBOR key type, expected P-384(2)");
+                            error!("{}", Error::KMSCBORKeyType);
+                            return Err(Box::new(Error::KMSCBORKeyType));
                         }
                     }
 
                     // Ignore public key (x,y) as we recompute it from d anyway
                     -2 | -3 => (),
 
-                    _ => panic!("Unexpected field in exported private key from KMS"),
+                    _ => {
+                        error!("{}", Error::KMSField);
+                        return Err(Box::new(Error::KMSField));
+                    }
                 };
             };
         }
     } else {
-        panic!("Incorrect CBOR encoding in returned private key");
+        error!("{}", Error::KMSCBOREncoding);
+        return Err(Box::new(Error::KMSCBOREncoding));
     };
 
+    Ok((kid, d))
+}
+
+async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
+    // Fetch MAA token
+    let token = fetch_maa_token(maa)?;
+
+    // Get HPKE private key from Azure KMS
+    let client = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    let key = get_hpke_private_key_from_kms(&client, kms, &token).await?;
+
+    // Parse the returned CBOR key (in CWK-like format)
+    let (kid, d) = parse_cbor_key(&key)?;
+
+    // Get the private and public keys from the encided key
     let (sk, pk) = if let Some(key) = d {
         let s = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::PrivateKey::from_bytes(&key)
             .expect("Failed to create HPKE private key");
         let p = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&s);
         (s, p)
     } else {
-        panic!("Missing private exponent in key returned from KMS");
+        error!("{}", Error::KMSPrivateExponent);
+        return Err(Box::new(Error::KMSPrivateExponent));
     };
 
+    // Get the key config
     let config = KeyConfig::import_p384(
         kid,
         Kem::P384Sha384,
@@ -207,24 +239,9 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
     Ok(config)
 }
 
-async fn generate_reply(
-    ohttp_ref: &Arc<Mutex<OhttpServer>>,
-    inject_headers: HeaderMap,
-    enc_request: &[u8],
-    target: Url,
-    _mode: Mode,
-) -> Res<(Response, ServerResponse)> {
-    let ohttp = ohttp_ref.lock().await;
-    let (request, server_response) = ohttp.decapsulate(enc_request)?;
-    let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
-
-    let method: Method = if let Some(method_bytes) = bin_request.control().method() {
-        Method::from_bytes(method_bytes)?
-    } else {
-        Method::GET
-    };
-
-    // Copy headers from the encapsulated request
+/// Copies headers from the encapsulated request and logs them.
+///
+fn get_headers_from_request(bin_request: &Message) -> HeaderMap {
     info!("Inner request headers");
     let mut headers = HeaderMap::new();
     for field in bin_request.header().fields() {
@@ -239,15 +256,33 @@ async fn generate_reply(
             HeaderValue::from_bytes(field.value()).unwrap(),
         );
     }
+    headers
+}
+
+async fn generate_reply(
+    ohttp_ref: &Arc<Mutex<OhttpServer>>,
+    inject_headers: HeaderMap,
+    enc_request: &[u8],
+    target: Url,
+    _mode: Mode,
+) -> Res<(Response, ServerResponse)> {
+    let ohttp = ohttp_ref.lock().await;
+    let (request, server_response) = ohttp.decapsulate(enc_request)?;
+    let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
+
+    // Copy headers from the encapsulated request
+    let mut headers = get_headers_from_request(&bin_request);
 
     // Inject additional headers from the outer request
-    info!("Inner request injected headers");
-    for (key, value) in inject_headers {
-        if let Some(key) = key {
-            info!("{}: {}", key.as_str(), value.to_str().unwrap());
-            headers.append(key, value);
+    if !inject_headers.is_empty() {
+        info!("Appending injected headers");
+        for (key, value) in inject_headers {
+            if let Some(key) = key {
+                info!("    {}: {}", key.as_str(), value.to_str().unwrap());
+                headers.append(key, value);
+            }
         }
-    }
+    };
 
     let mut t = target;
     if let Some(path_bytes) = bin_request.control().path() {
@@ -255,6 +290,12 @@ async fn generate_reply(
             t.set_path(path_str);
         }
     }
+
+    let method: Method = if let Some(method_bytes) = bin_request.control().method() {
+        Method::from_bytes(method_bytes)?
+    } else {
+        Method::GET
+    };
 
     let client = reqwest::ClientBuilder::new().build()?;
     let response = client
@@ -291,12 +332,25 @@ async fn score(
     mode: Mode,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     info!("Received encapsulated score request for target {}", target);
-    info!("Request headers");
+    info!("Request headers length = {}", headers.len());
     for (key, value) in &headers {
-        info!("{}: {}", key, value.to_str().unwrap());
+        info!("    {}: {}", key, value.to_str().unwrap());
     }
 
-    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    info!(
+        "Request inject headers length = {}",
+        inject_request_headers.len()
+    );
+    for key in &inject_request_headers {
+        info!("    {}", key);
+    }
+
+    let inject_headers: HeaderMap = compute_injected_headers(&headers, inject_request_headers);
+    info!("Injected headers length = {}", inject_headers.len());
+    for (key, value) in &inject_headers {
+        info!("    {}: {}", key, value.to_str().unwrap());
+    }
+
     let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
 
     match reply.await {
@@ -360,37 +414,62 @@ fn with_ohttp(
     warp::any().map(move || Arc::clone(&ohttp))
 }
 
-#[tokio::main]
-async fn main() -> Res<()> {
-    let args = Args::parse();
-    ::ohttp::init();
-
-    // Build a simple subscriber that outputs to stdout
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::INFO)
-        .json()
-        .finish();
-
-    // Set the subscriber as global default
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
-    let config = if args.attest {
-        let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
-        let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
-        import_config(maa_url, kms_url).await?
+/// Asynchronously retrieves a key configuration based on the attestation requirement.
+///
+async fn get_key_config(
+    attest: bool,
+    kms_url: &Option<String>,
+    maa_url: &Option<String>,
+) -> Res<KeyConfig> {
+    if attest {
+        let kms_url = kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
+        let maa_url = maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
+        import_config(&maa_url, &kms_url).await
     } else {
-        KeyConfig::new(
+        Ok(KeyConfig::new(
             0,
             Kem::X25519Sha256,
             vec![
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
             ],
-        )?
-    };
+        )?)
+    }
+}
 
-    let ohttp = OhttpServer::new(config)?;
-    let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()])?);
+#[tokio::main]
+async fn main() -> Res<()> {
+    // Build a simple subscriber that outputs to stdout
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_file(true)
+        .with_line_number(true)
+        .json()
+        .finish();
+
+    // Set the subscriber as global default
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
+    ::ohttp::init();
+
+    let args = Args::parse();
+
+    let config = get_key_config(args.attest, &args.kms_url, &args.maa_url)
+        .await
+        .map_err(|e| {
+            error!("{e}");
+            e
+        })?;
+
+    let ohttp = OhttpServer::new(config).map_err(|e| {
+        error!("{e}");
+        e
+    })?;
+
+    let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()]).map_err(|e| {
+        error!("{e}");
+        e
+    })?);
     trace!("Config: {}", config);
 
     let mode = args.mode();

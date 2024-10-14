@@ -8,7 +8,7 @@ use serde::Deserialize;
 mod err;
 pub use crate::err::{Error, Res};
 use colored::*;
-use log::info;
+use tracing::info;
 
 #[derive(Deserialize)]
 struct ProofElement {

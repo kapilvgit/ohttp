@@ -1,7 +1,6 @@
 use bhttp::{Message, Mode};
 use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
-use log::{info, trace};
 use ohttp::ClientRequest;
 use reqwest::{header::AUTHORIZATION, Client};
 use serde::Deserialize;
@@ -12,12 +11,16 @@ use std::{
     path::PathBuf,
     str::FromStr,
 };
+use tracing::{error, info, trace};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.com";
 
 #[derive(Debug, Clone)]
+/// This allows a `HexArg` to be created from a string slice (`&str`) by decoding
+/// the string as hexadecimal.
 struct HexArg(Vec<u8>);
 impl FromStr for HexArg {
     type Err = hex::FromHexError;
@@ -26,6 +29,7 @@ impl FromStr for HexArg {
         hex::decode(s).map(HexArg)
     }
 }
+/// This allows `HexArg` instances to be dereferenced to a slice of bytes (`[u8]`).
 impl Deref for HexArg {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
@@ -70,11 +74,11 @@ struct Args {
     #[arg(long, short = 'n', alias = "indefinite")]
     indeterminate: bool,
 
-    /// List of headers in the outer request
+    /// List of headers in the inner request
     #[arg(long, short = 'H')]
     headers: Option<Vec<String>>,
 
-    /// List of headers in the outer request
+    /// List of fields in the inner request
     #[arg(long, short = 'F')]
     form_fields: Option<Vec<String>>,
 
@@ -82,37 +86,51 @@ struct Args {
     #[arg(long, short = 'O')]
     outer_headers: Option<Vec<String>>,
 
-    /// List of headers in the outer request
+    /// Token for the outer request
     #[arg(long, short = 'T')]
     token: Option<String>,
 }
 
-// Create a multi-part request from a file
-fn create_multipart_request(
-    target_path: &str,
-    headers: Option<Vec<String>>,
-    fields: Option<Vec<String>>,
-) -> Res<Vec<u8>> {
-    // Define boundary for multipart
-    let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
+/// Writes the request line for an HTTP POST request to the provided buffer.
+/// The request line follows the format:
+/// `POST {target_path} HTTP/1.1\r\n`.
+fn write_post_request_line(request: &mut Vec<u8>, target_path: &str) -> Res<()> {
+    write!(request, "POST {target_path} HTTP/1.1\r\n")?;
+    Ok(())
+}
 
-    let mut request = Vec::new();
-    write!(&mut request, "POST {target_path} HTTP/1.1\r\n")?;
-
+/// Appends HTTP headers to the provided request buffer.
+fn append_headers(request: &mut Vec<u8>, headers: &Option<Vec<String>>) -> Res<()> {
     if let Some(headers) = headers {
         for header in headers {
-            write!(&mut request, "{header}\r\n")?;
+            write!(request, "{header}\r\n")?;
             info!("{header}\r\n");
         }
     }
+    Ok(())
+}
 
-    // Create multipart body
+/// Creates a multipart/form-data body for an HTTP request.
+/// Structure of multipart body -
+///
+///      ---------------------------boundaryString
+///      Content-Disposition: form-data; name="field1"
+///
+///      value1
+///      ---------------------------boundaryString
+///      Content-Disposition: form-data; name="file"; filename="example.txt"
+///      Content-Type: text/plain
+///
+///      ... contents of the file ...
+///      ---------------------------boundaryString
+fn create_multipart_body(fields: &Option<Vec<String>>, boundary: &str) -> Res<Vec<u8>> {
     let mut body = Vec::new();
 
     if let Some(fields) = fields {
         for field in fields {
             let (name, value) = field.split_once('=').unwrap();
             if value.starts_with('@') {
+                // If the value starts with '@', it is treated as a file path.
                 let filename = value.strip_prefix('@').unwrap();
                 let mut file = File::open(filename)?;
                 let mut file_contents = Vec::new();
@@ -135,15 +153,80 @@ fn create_multipart_request(
         }
     }
 
+    Ok(body)
+}
+
+/// Append the headers for a multipart/form-data HTTP request to the provided buffer.
+///      Content-Type: multipart/form-data; boundary=---------------------------boundaryString
+///      Content-Length: 12345
+fn append_multipart_headers(request: &mut Vec<u8>, boundary: &str, body_len: usize) -> Res<()> {
     write!(
-        &mut request,
+        request,
         "Content-Type: multipart/form-data; boundary={boundary}\r\n"
     )?;
-    write!(&mut request, "Content-Length: {}\r\n", body.len())?;
-    write!(&mut request, "\r\n")?;
+    write!(request, "Content-Length: {}\r\n", body_len)?;
+    write!(request, "\r\n")?;
+    Ok(())
+}
+
+/// Creates an http multipart message.
+///      Content-Type: multipart/form-data; boundary=---------------------------boundaryString
+///      Content-Length: 12345
+///
+///      ---------------------------boundaryString
+///      Content-Disposition: form-data; name="field1"
+///
+///      value1
+///      ---------------------------boundaryString
+///      Content-Disposition: form-data; name="file"; filename="example.txt"
+///      Content-Type: text/plain
+///
+///      ... contents of the file ...
+///      ---------------------------boundaryString
+fn create_multipart_request(
+    target_path: &str,
+    headers: &Option<Vec<String>>,
+    fields: &Option<Vec<String>>,
+) -> Res<Vec<u8>> {
+    // Define boundary for multipart
+    let boundary = "----ConfidentialInferencingFormBoundary7MA4YWxkTrZu0gW";
+
+    // Create a POST request for target target_path
+    let mut request = Vec::new();
+    write_post_request_line(&mut request, target_path)?;
+    append_headers(&mut request, headers)?;
+
+    // Create multipart body
+    let mut body = create_multipart_body(fields, boundary)?;
+
+    // Append multipart headers
+    append_multipart_headers(&mut request, boundary, body.len())?;
+
+    // Append body to the request
     request.append(&mut body);
 
     Ok(request)
+}
+
+/// Prepares a http message based on the `is_bhttp` flag and other parameters.
+fn create_request_buffer(
+    is_bhttp: bool,
+    target_path: &str,
+    headers: &Option<Vec<String>>,
+    form_fields: &Option<Vec<String>>,
+) -> Res<Vec<u8>> {
+    let request = create_multipart_request(target_path, headers, form_fields)?;
+    let mut cursor = Cursor::new(request);
+
+    let request = if is_bhttp {
+        Message::read_bhttp(&mut cursor)?
+    } else {
+        Message::read_http(&mut cursor)?
+    };
+
+    let mut request_buf = Vec::new();
+    request.write_bhttp(Mode::KnownLength, &mut request_buf)?;
+    Ok(request_buf)
 }
 
 // Get key configuration from KMS
@@ -176,98 +259,106 @@ struct KmsKeyConfiguration {
 
 /// Reads a json containing key configurations with receipts and constructs
 /// a single use client sender from the first supported configuration.
-pub fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
-    let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
-    let kms_config = match kms_configs.pop() {
-        Some(config) => config,
-        None => return Err("No KMS configuration found".into()),
-    };
-    info!("{}", "Establishing trust in key management service...");
-    let _ = verifier::verify(&kms_config.receipt, cert)?;
-    info!(
-        "{}",
-        "The receipt for the generation of the OHTTP key is valid."
-    );
-    let encoded_config = hex::decode(&kms_config.key_config)?;
-    Ok(ClientRequest::from_encoded_config(&encoded_config)?)
+trait ClientRequestBuilder {
+    fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest>;
 }
 
-#[tokio::main]
-async fn main() -> Res<()> {
-    let args = Args::parse();
-    ::ohttp::init();
-    env_logger::try_init().unwrap();
+impl ClientRequestBuilder for ClientRequest {
+    /// Reads a json containing key configurations with receipts and constructs
+    /// a single use client sender from the first supported configuration.
+    fn from_kms_config(config: &str, cert: &str) -> Res<ClientRequest> {
+        let mut kms_configs: Vec<KmsKeyConfiguration> = serde_json::from_str(config)?;
+        let kms_config = match kms_configs.pop() {
+            Some(config) => config,
+            None => return Err("No KMS configuration found".into()),
+        };
+        info!("{}", "Establishing trust in key management service...");
+        let _ = verifier::verify(&kms_config.receipt, cert)?;
+        info!(
+            "{}",
+            "The receipt for the generation of the OHTTP key is valid."
+        );
+        let encoded_config = hex::decode(&kms_config.key_config)?;
+        Ok(ClientRequest::from_encoded_config(&encoded_config)?)
+    }
+}
 
-    trace!("================== STEP 1 ==================");
+/// Creates an OHTTP client from the static config provided in Args.
+///
+fn create_request_from_encoded_config_list(config: &Option<HexArg>) -> Res<ohttp::ClientRequest> {
+    let config = config.clone().expect("Config expected.");
+    Ok(ohttp::ClientRequest::from_encoded_config_list(&config)?)
+}
 
-    let request = {
-        let form_fields = args.form_fields.clone();
-        let headers = args.headers.clone();
-        let request = create_multipart_request(&args.target_path, headers, form_fields)?;
-        let mut cursor = Cursor::new(request);
-        if args.binary {
-            Message::read_bhttp(&mut cursor)?
-        } else {
-            Message::read_http(&mut cursor)?
-        }
-    };
+/// Creates an OHTTP client from KMS.
+///
+async fn create_request_from_kms_config(
+    kms_cert: &PathBuf,
+    kms_url: &Option<String>,
+) -> Res<ohttp::ClientRequest> {
+    let cert = fs::read_to_string(kms_cert)?;
+    let url = kms_url
+        .clone()
+        .unwrap_or_else(|| DEFAULT_KMS_URL.to_string());
+    let config = get_kms_config(url.to_string(), &cert).await?;
+    ClientRequest::from_kms_config(&config, &cert)
+}
 
-    let mut request_buf = Vec::new();
-    request.write_bhttp(Mode::KnownLength, &mut request_buf)?;
-
-    let ohttp_request = if let Some(kms_cert) = &args.kms_cert {
-        let cert = fs::read_to_string(kms_cert)?;
-        let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
-        let config = get_kms_config(kms_url.to_string(), &cert).await?;
-        from_kms_config(&config, &cert)?
-    } else {
-        let config = &args.config.clone().expect("Config expected.");
-        ohttp::ClientRequest::from_encoded_config_list(config)?
-    };
-
-    trace!("================== STEP 2 ==================");
-
-    let (enc_request, client_response) = ohttp_request.encapsulate(&request_buf)?;
-    info!(
-        "Sending encrypted OHTTP request to {}: {}",
-        args.url,
-        hex::encode(&enc_request[0..60])
-    );
-
+async fn post_request(
+    url: &String,
+    outer_headers: &Option<Vec<String>>,
+    token: &Option<String>,
+    enc_request: Vec<u8>,
+) -> Res<reqwest::Response> {
     let client = reqwest::ClientBuilder::new().build()?;
 
-    let tokenstr = args.token.as_ref().map_or("None", |s| s.as_str());
+    let tokenstr = token.as_ref().map_or("None", |s| s.as_str());
 
     let mut builder = client
-        .post(&args.url)
+        .post(url)
         .header("content-type", "message/ohttp-chunked-req")
         .header(AUTHORIZATION, format!("Bearer {tokenstr}"));
 
     // Add outer headers
-    info!("Outer request headers:");
-    let outer_headers = args.outer_headers.clone();
+    trace!("Outer request headers:");
+    let outer_headers = outer_headers.clone();
     if let Some(headers) = outer_headers {
         for header in headers {
             let (key, value) = header.split_once(':').unwrap();
-            info!("Adding {key}: {value}");
+            trace!("Adding {key}: {value}");
             builder = builder.header(key, value);
         }
     }
 
     let response = builder.body(enc_request).send().await?.error_for_status()?;
-
-    info!("response status: {}\n", response.status());
-    info!("Response headers:");
+    trace!("response status: {}\n", response.status());
+    trace!("Response headers:");
     for (key, value) in response.headers() {
-        info!(
+        trace!(
             "{}: {}",
             key,
             std::str::from_utf8(value.as_bytes()).unwrap()
         );
     }
 
-    let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
-        Box::new(File::open(outfile)?)
+    Ok(response)
+}
+
+/// Decapsulate the http response
+/// The response can be saved to a file or printed to stdout, based on the value of args.output
+async fn handle_response(
+    response: reqwest::Response,
+    client_response: ohttp::ClientResponse,
+    output: &Option<PathBuf>,
+) -> Res<()> {
+    let mut output: Box<dyn io::Write> = if let Some(outfile) = output {
+        match File::create(outfile) {
+            Ok(file) => Box::new(file),
+            Err(e) => {
+                error!("Error opening output file: {}", e);
+                return Err(Box::new(e));
+            }
+        }
     } else {
         Box::new(std::io::stdout())
     };
@@ -287,9 +378,91 @@ async fn main() -> Res<()> {
                 output.write_all(&chunk)?;
             }
             Err(e) => {
-                println!("Error in stream {e}")
+                error!("Error in stream {e}")
             }
         }
     }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Res<()> {
+    // Build a simple subscriber that outputs to stdout
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_file(true)
+        .with_line_number(true)
+        .json()
+        .finish();
+
+    // Set the subscriber as global default
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
+    ::ohttp::init();
+
+    let args = Args::parse();
+
+    //  Create ohttp request buffer
+    let request_buf = match create_request_buffer(
+        args.binary,
+        &args.target_path,
+        &args.headers,
+        &args.form_fields,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("{e}");
+            return Err(e);
+        }
+    };
+
+    trace!("Created the ohttp request buffer");
+
+    //  create the OHTTP request using the KMS or the static config file
+    let result = if let Some(kms_cert) = &args.kms_cert {
+        create_request_from_kms_config(kms_cert, &args.kms_url).await
+    } else {
+        create_request_from_encoded_config_list(&args.config)
+    };
+    let ohttp_request = match result {
+        Ok(request) => request,
+        Err(e) => {
+            error!("{e}");
+            return Err(e);
+        }
+    };
+    trace!("Created ohttp client request");
+
+    // Encapsulate the http buffer using the OHTTP request
+    let (enc_request, ohttp_response) = match ohttp_request.encapsulate(&request_buf) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("{e}");
+            return Err(Box::new(e));
+        }
+    };
+    trace!(
+        "Encapsulated the OHTTP request {}",
+        hex::encode(&enc_request[0..60])
+    );
+
+    // Post the encapsulated ohttp request buffer to args.url
+    let response =
+        match post_request(&args.url, &args.outer_headers, &args.token, enc_request).await {
+            Ok(response) => response,
+            Err(e) => {
+                error!("{e}");
+                return Err(e);
+            }
+        };
+    trace!("Posted the OHTTP request to {}", args.url);
+
+    // decapsulate and output the http response
+    if let Err(e) = handle_response(response, ohttp_response, &args.output).await {
+        error!("{e}");
+        return Err(e);
+    }
+
     Ok(())
 }

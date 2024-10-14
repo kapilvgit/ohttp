@@ -30,7 +30,7 @@ if [[ -z ${INSTANCE_SPECIFIC_KEY} ]]; then
 fi
 
 if [[ -n ${INJECT_HEADERS} ]]; then 
-  CMD="$CMD -i ${INJECT_HEADERS}"
+  CMD="$CMD --inject-request-headers ${INJECT_HEADERS}"
 fi
 
 if [[ -n ${MAA_URL} ]]; then 
