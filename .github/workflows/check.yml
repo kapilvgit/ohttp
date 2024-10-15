@@ -90,7 +90,14 @@ jobs:
         run: |
           make build
 
-      - name: Run tests against container images
+      - name: Run server container image
         run: |
           make run-server-whisper
+
+      - name: Run client image
+        run: | 
           make run-client-container-local
+
+      - name: Stop containers
+        run: |
+          docker stop $(docker ps -q)

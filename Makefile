@@ -4,9 +4,9 @@ MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
 # MODEL can be whisper_opensource, whisper_aoai or whisper_aoai_local
 MODEL ?= whisper_opensource
 ifeq ($(MODEL), whisper_opensource)
-	TARGET ?= http://127.0.0.1:3000
-	TARGET_PATH ?= '/whisper'
-	SCORING_ENDPOINT ?= 'http://localhost:9443/score'
+	export TARGET ?= http://127.0.0.1:3000
+	export TARGET_PATH ?= '/whisper'
+	export SCORING_ENDPOINT ?= 'http://localhost:9443/score'
 else ifeq ($(MODEL), whisper_aoai_local)
 	TARGET ?= http://127.0.0.1:5001
 	TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
@@ -20,8 +20,8 @@ else
 	echo "Unknown model"
 endif
 	
-INPUT ?= ./examples/audio.mp3
-INJECT_HEADERS ?= openai-internal-enableasrsupport
+export INPUT ?= ./examples/audio.mp3
+export INJECT_HEADERS ?= openai-internal-enableasrsupport
 
 # Build commands
 
@@ -55,7 +55,10 @@ run-server-container:
 	docker compose -f ./docker/docker-compose-server.yml up
 
 run-server-container-attest: 
-	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
+	docker run --privileged --net=host \
+	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} \
+	--mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security \
+	--device /dev/tpmrm0  ohttp-server
 
 # Whisper deployments
 
@@ -66,7 +69,7 @@ run-whisper-faster:
 	docker run --network=host fedirz/faster-whisper-server:latest-cuda
 
 run-server-whisper:
-	docker compose -f ./docker/docker-compose-whisper.yml up
+	docker compose -f ./docker/docker-compose-whisper.yml up -d
 
 run-server-faster:
 	docker compose -f ./docker/docker-compose-faster-whisper.yml up
