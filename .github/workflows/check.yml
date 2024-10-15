@@ -96,6 +96,7 @@ jobs:
 
       - name: Run client image
         run: | 
+          ./scripts/service_wait.sh 127.0.0.1:9443
           make run-client-container-local
 
       - name: Stop containers
