@@ -23,6 +23,8 @@ endif
 INPUT ?= ./examples/audio.mp3
 INJECT_HEADERS ?= openai-internal-enableasrsupport
 
+# Build commands
+
 build-whisper:
 	docker build -f docker/whisper/Dockerfile -t whisper-api ./docker/whisper
 
@@ -35,7 +37,9 @@ build-client:
 build-streaming:
 	docker build -f docker/streaming/Dockerfile -t nodejs-streaming .
 
-build: build-server build-client build-streaming build-whisper
+build: build-server build-client build-whisper
+
+# Local server deployments
 
 run-server:
 	cargo run --bin ohttp-server -- --target ${TARGET}
@@ -45,20 +49,21 @@ run-server-attest:
 		--key ./ohttp-server/server.key --target ${TARGET} \
 		--attest --maa_url ${MAA} --kms_url ${KMS}
 
+# Containerized server deployments
+
 run-server-container: 
 	docker compose -f ./docker/docker-compose-server.yml up
 
 run-server-container-attest: 
 	docker run --privileged -e TARGET=${TARGET} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} --net=host --mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security  --device /dev/tpmrm0  ohttp-server
 
+# Whisper deployments
+
 run-whisper:
 	docker run --network=host whisper-api 
 
 run-whisper-faster: 
 	docker run --network=host fedirz/faster-whisper-server:latest-cuda
-
-run-server-streaming:
-	docker compose -f ./docker/docker-compose-streaming.yml up
 
 run-server-whisper:
 	docker compose -f ./docker/docker-compose-whisper.yml up
@@ -71,16 +76,18 @@ service-cert:
 
 verify-quote:
 	verify_quote.sh ${KMS} --cacert service_cert.pem
-	
-run-client-kms: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
-  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  --kms-cert ./service_cert.pem 
+
+# Local client deployments
 
 run-client-local:
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   -H "api-key: test123" --config `curl -s http://localhost:9443/discover` 
+
+run-client-kms: service-cert 
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
+  --kms-cert ./service_cert.pem 
 
 run-client-kms-aoai-local: service-cert 
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
@@ -94,12 +101,18 @@ run-client-kms-aoai: service-cert
   --kms-cert ./service_cert.pem \
   -H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
 
+# Containerized client deployments
+
+run-client-container-local:
+	docker run --privileged --net=host -e SCORING_ENDPOINT=${SCORING_ENDPOINT} \
+	-e TARGET_PATH=${TARGET_PATH} -e INPUT=${INPUT} ohttp-client
+
 run-client-container:
-	docker run --privileged --net=host -e TARGET=${SCORING_ENDPOINT} \
+	docker run --privileged --net=host -e SCORING_ENDPOINT=${SCORING_ENDPOINT} \
 	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
 	-e INPUT=${INPUT} ohttp-client
 
 run-client-container-it:
-	docker run -it --privileged --net=host -e TARGET=${SCORING_ENDPOINT} \
+	docker run -it --privileged --net=host -e SCORING_ENDPOINT=${SCORING_ENDPOINT} \
 	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
 	-e INPUT=${INPUT} ohttp-client bash

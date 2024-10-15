@@ -85,3 +85,12 @@ jobs:
         if: ${{ success() || failure() }}
         run: |
           cargo clippy --tests --no-default-features --features ${{ matrix.hpke }},client,server
+
+      - name: Build container images
+        run: |
+          make build
+
+      - name: Run tests against container images
+        run: |
+          make run-server-whisper
+          make run-client-container-local
