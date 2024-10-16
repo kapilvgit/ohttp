@@ -2,12 +2,14 @@
 
 use std::{io::Cursor, net::SocketAddr, sync::Arc};
 
+use lazy_static::lazy_static;
+use moka::future::Cache;
+
 use futures_util::stream::unfold;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Method, Response, Url,
 };
-use tokio::sync::Mutex;
 
 use bhttp::{Message, Mode};
 use clap::Parser;
@@ -44,7 +46,7 @@ const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.c
 const DEFAULT_MAA_URL: &str = "https://sharedeus2.eus2.attest.azure.net";
 const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone)]
 #[command(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
 struct Args {
     /// The address to bind to.
@@ -61,7 +63,7 @@ struct Args {
     target: Url,
 
     /// Obtain key configuration from a KMS after attestation
-    #[arg(long, short = 'a')]
+    #[arg(long, short = 'a', default_value_t = true)]
     attest: bool,
 
     /// MAA endpoint
@@ -86,12 +88,23 @@ impl Args {
     }
 }
 
-async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
+lazy_static! {
+    static ref cache : Arc<Cache<i32, KeyConfig>> = Arc::new(Cache::builder()
+        .time_to_live(Duration::from_secs(24 * 60 * 60))
+        .build());
+}
+
+async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<KeyConfig> {
+    // Check if the key configuration is in cache
+    if let Some(config) = cache.get(&kid).await {
+        info!("Found OHTTP configuration for KID {kid} in cache.");
+        return Ok(config);
+    }
+
     // Get MAA token from CVM guest attestation library
-    let Some(tok) = attest("{}".as_bytes(), 0xffff, maa) else {
-        panic!("Failed to get MAA token. You must be root to access TPM.")
-    };
-    let token = String::from_utf8(tok).unwrap();
+    let token = attest("{}".as_bytes(), 0xffff, maa)?;
+
+    let token = String::from_utf8(token).unwrap();
     info!("Fetched MAA token");
     trace!("{token}");
 
@@ -103,43 +116,61 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
     let max_retries = 3;
     let mut retries = 0;
     let key: String;
-    let mut kid: u8 = 0;
 
     loop {
+        // kid<0 will get the latest, this is used by the discover endpoint
+        let url = if kid>=0 { format!("{kms}?kid={kid}") }else{ kms.to_owned() };
+        info!("Sending SKR request to {url}");
+
         // Get HPKE private key from Azure KMS
+        // FIXME(adl) kid should be an input of the SKR request
         let response = client
-            .post(kms)
+            .post(url)
             .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
 
         // We may have to wait for receipt to be ready
-        if response.status() == 202 {
-            if retries < max_retries {
-                retries += 1;
-                trace!(
-                    "Received 202 status code, retrying... (attempt {}/{})",
-                    retries,
-                    max_retries
-                );
-                sleep(Duration::from_secs(1)).await;
-            } else {
-                panic!("Max retries reached, giving up. Cannot reach key management service");
-            }
-        } else {
-            let skr_body = response.text().await?;
-            let skr: ExportedKey =
-                from_str(&skr_body).expect("Failed to deserialize SKR response. Check KMS version");
+        match response.status().as_u16() {
+            202 => {
+                if retries < max_retries {
+                    retries += 1;
+                    trace!(
+                        "Received 202 status code, retrying... (attempt {}/{})",
+                        retries,
+                        max_retries
+                    );
+                    sleep(Duration::from_secs(1)).await;
+                } else {
+                    Err("Max retries reached, giving up. Cannot reach key management service")?;
+                }
+            },
+            200 => {
+                let skr_body = response.text().await?;
+                info!("SKR successful {}", skr_body);
 
-            info!("SKR successful");
-            trace!("KID={}, Receipt={}", skr.kid, skr.receipt);
-            key = skr.key;
-            break;
+                let skr: ExportedKey = from_str(&skr_body)?;
+                trace!("requested KID={}, returned KID={}, Receipt={}", kid, skr.kid, skr.receipt);
+
+                if kid >= 0 && skr.kid as i32 != kid {
+                    Err("KMS returned a different key ID from the one requested")?
+                }
+
+                key = skr.key;
+                break;
+            },
+            e => {
+                info!("KMS returned an unexpected status code: {e}");
+                key = "".to_string();
+                break
+            }
         }
     }
-    let cwk = hex::decode(&key).expect("Failed to decode hex key");
-    let cwk_map: Value = serde_cbor::from_slice(&cwk).expect("Invalid CBOR in key from KMS");
+
+    let cwk = hex::decode(&key)?;
+    let cwk_map: Value = serde_cbor::from_slice(&cwk)?;
     let mut d = None;
+    let mut returned_kid : u8 = 0;
 
     // Parse the returned CBOR key (in CWK-like format)
     if let Value::Map(map) = cwk_map {
@@ -149,9 +180,12 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                     // key identifier
                     4 => {
                         if let Value::Integer(k) = value {
-                            kid = u8::try_from(k).unwrap();
+                            returned_kid = u8::try_from(k).unwrap();
+                            if kid >=0 && returned_kid as i32 != kid {
+                                Err("Server returned a different KID from the one requested")?;
+                            }
                         } else {
-                            panic!("Bad KID");
+                            Err("Bad key identifier in SKR response")?
                         }
                     }
 
@@ -160,7 +194,7 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                         if let Value::Bytes(vec) = value {
                             d = Some(vec);
                         } else {
-                            panic!("Invalid private key");
+                            Err("Invalid secret exponent in SKR response")?
                         }
                     }
 
@@ -168,32 +202,29 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
                     -1 => {
                         if value == Value::Integer(2) {
                         } else {
-                            panic!("Bad CBOR key type, expected P-384(2)");
+                            Err("Bad CBOR key type, expected P-384(2)")?
                         }
                     }
 
                     // Ignore public key (x,y) as we recompute it from d anyway
                     -2 | -3 => (),
 
-                    _ => panic!("Unexpected field in exported private key from KMS"),
+                    _ => Err("Unexpected field in exported private key from KMS")?,
                 };
             };
         }
     } else {
-        panic!("Incorrect CBOR encoding in returned private key");
+        Err("Incorrect CBOR encoding in returned private key")?;
     };
 
-    let (sk, pk) = if let Some(key) = d {
-        let s = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::PrivateKey::from_bytes(&key)
-            .expect("Failed to create HPKE private key");
-        let p = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&s);
-        (s, p)
-    } else {
-        panic!("Missing private exponent in key returned from KMS");
-    };
+    let sk = match d {
+        Some(key) => <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::PrivateKey::from_bytes(&key),
+        None => Err("Private key missing from SKR response")?
+    }?;
+    let pk = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&sk);
 
     let config = KeyConfig::import_p384(
-        kid,
+        returned_kid,
         Kem::P384Sha384,
         sk,
         pk,
@@ -204,17 +235,17 @@ async fn import_config(maa: &str, kms: &str) -> Res<KeyConfig> {
         ],
     )?;
 
+    cache.insert(kid, config.clone()).await;
     Ok(config)
 }
 
 async fn generate_reply(
-    ohttp_ref: &Arc<Mutex<OhttpServer>>,
+    ohttp: &OhttpServer,
     inject_headers: HeaderMap,
     enc_request: &[u8],
     target: Url,
     _mode: Mode,
 ) -> Res<(Response, ServerResponse)> {
-    let ohttp = ohttp_ref.lock().await;
     let (request, server_response) = ohttp.decapsulate(enc_request)?;
     let bin_request = Message::read_bhttp(&mut Cursor::new(&request[..]))?;
 
@@ -281,88 +312,130 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
     result
 }
 
-#[allow(clippy::unused_async)]
 async fn score(
     headers: warp::hyper::HeaderMap,
-    inject_request_headers: Vec<String>,
     body: warp::hyper::body::Bytes,
-    ohttp: Arc<Mutex<OhttpServer>>,
-    target: Url,
-    mode: Mode,
+    args: Arc<Args>,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
+
+    let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
+    let maa_url = args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
+    let mode = args.mode();
+    let target = args.target.clone();
+    let inject_request_headers = args.inject_request_headers.clone();
+
     info!("Received encapsulated score request for target {}", target);
     info!("Request headers");
     for (key, value) in &headers {
         info!("{}: {}", key, value.to_str().unwrap());
     }
 
-    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
-    let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode);
+    let kid : i32 = match body.get(0).copied() {None => -1, Some(kid) => kid as i32};
 
-    match reply.await {
-        Ok((response, server_response)) => {
-            let mut builder =
-                warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+    let ohttp = match import_config(&maa_url, &kms_url, kid).await {
+      Ok(config) => match OhttpServer::new(config) {
+        Ok(ohttp) => Some(ohttp),
+        _ => None
+      },
+      _ => None
+    };
 
-            // Move headers from the inner response into the outer response
-            info!("Response headers:");
-            for (key, value) in response.headers() {
-                if !FILTERED_RESPONSE_HEADERS
-                    .iter()
-                    .any(|h| h.eq_ignore_ascii_case(key.as_str()))
-                {
-                    info!(
-                        "{}: {}",
-                        key,
-                        std::str::from_utf8(value.as_bytes()).unwrap()
-                    );
-                    builder = builder.header(key.as_str(), value.as_bytes());
+    match ohttp {
+      None => Ok(warp::http::Response::builder()
+                .status(500)
+                .body(Body::from(&b"Failed to get or load the OHTTP coniguration from local cache or key management service."[..]))),
+
+      Some(ohttp) => {
+        let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+        let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode).await;
+
+        match reply {
+            Ok((response, server_response)) => {
+                let mut builder =
+                    warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+                // Move headers from the inner response into the outer response
+                info!("Response headers:");
+                for (key, value) in response.headers() {
+                    if !FILTERED_RESPONSE_HEADERS
+                        .iter()
+                        .any(|h| h.eq_ignore_ascii_case(key.as_str()))
+                    {
+                        info!(
+                            "{}: {}",
+                            key,
+                            std::str::from_utf8(value.as_bytes()).unwrap()
+                        );
+                        builder = builder.header(key.as_str(), value.as_bytes());
+                    }
+                }
+
+                let stream = Box::pin(unfold(response, |mut response| async move {
+                    match response.chunk().await {
+                        Ok(Some(chunk)) => {
+                            Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response))
+                        }
+                        _ => None,
+                    }
+                }));
+
+                let stream = server_response.encapsulate_stream(stream);
+                Ok(builder.body(Body::wrap_stream(stream)))
+            }
+            Err(e) => {
+                error!("400 {}", e.to_string());
+                if let Ok(oe) = e.downcast::<::ohttp::Error>() {
+                    Ok(warp::http::Response::builder()
+                        .status(422)
+                        .body(Body::from(format!("Error: {oe:?}"))))
+                } else {
+                    Ok(warp::http::Response::builder()
+                        .status(400)
+                        .body(Body::from(&b"Request error"[..])))
                 }
             }
-
-            let stream = Box::pin(unfold(response, |mut response| async move {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => {
-                        Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response))
-                    }
-                    _ => None,
-                }
-            }));
-
-            let stream = server_response.encapsulate_stream(stream);
-            Ok(builder.body(Body::wrap_stream(stream)))
         }
-        Err(e) => {
-            error!("400 {}", e.to_string());
-            if let Ok(oe) = e.downcast::<::ohttp::Error>() {
+      }
+    }
+}
+
+#[allow(clippy::unused_async)]
+async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Infallible> {
+    let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
+    let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
+
+    match import_config(maa_url, kms_url, -1).await {
+        Err(_e) =>
+          Ok(warp::http::Response::builder()
+          .status(500)
+          .body(Body::from(&b"Failed to get OHTTP coniguration from local cache or key management service. The key ID of the request may be invalid or expired."[..]))),
+  
+        Ok(config) =>
+          match KeyConfig::encode_list(&[config]) {
+            Err(_e) =>
+              Ok(warp::http::Response::builder()
+              .status(500)
+              .body(Body::from(&b"Failed to get OHTTP coniguration from local cache or key management service. The key ID of the request may be invalid or expired."[..]))),
+  
+            Ok(list) => {
+                let hex = hex::encode(list);
+                trace!("Discover config: {}", hex);
+
                 Ok(warp::http::Response::builder()
-                    .status(422)
-                    .body(Body::from(format!("Error: {oe:?}"))))
-            } else {
-                Ok(warp::http::Response::builder()
-                    .status(400)
-                    .body(Body::from(&b"Request error"[..])))
+                    .status(200)
+                    .body(Vec::from(hex).into()))
             }
         }
     }
 }
 
-#[allow(clippy::unused_async)]
-async fn discover(config: String) -> Result<impl warp::Reply, std::convert::Infallible> {
-    Ok(warp::http::Response::builder()
-        .status(200)
-        .body(Vec::from(config)))
-}
-
-fn with_ohttp(
-    ohttp: Arc<Mutex<OhttpServer>>,
-) -> impl Filter<Extract = (Arc<Mutex<OhttpServer>>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || Arc::clone(&ohttp))
-}
-
 #[tokio::main]
 async fn main() -> Res<()> {
     let args = Args::parse();
+    let address = args.address.clone();
+    let argsc = Arc::new(args);
+    let args1 = Arc::clone(&argsc);
+    let args2 = Arc::clone(&argsc);
     ::ohttp::init();
 
     // Build a simple subscriber that outputs to stdout
@@ -374,49 +447,23 @@ async fn main() -> Res<()> {
     // Set the subscriber as global default
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let config = if args.attest {
-        let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
-        let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
-        import_config(maa_url, kms_url).await?
-    } else {
-        KeyConfig::new(
-            0,
-            Kem::X25519Sha256,
-            vec![
-                SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
-                SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
-            ],
-        )?
-    };
-
-    let ohttp = OhttpServer::new(config)?;
-    let config = hex::encode(KeyConfig::encode_list(&[ohttp.config()])?);
-    trace!("Config: {}", config);
-
-    let mode = args.mode();
-    let target = args.target;
-    let inject_request_headers = args.inject_request_headers;
-
     let score = warp::post()
         .and(warp::path::path("score"))
         .and(warp::path::end())
         .and(warp::header::headers_cloned())
-        .and(warp::any().map(move || inject_request_headers.clone()))
         .and(warp::body::bytes())
-        .and(with_ohttp(Arc::new(Mutex::new(ohttp))))
-        .and(warp::any().map(move || target.clone()))
-        .and(warp::any().map(move || mode))
+        .and(warp::any().map(move || Arc::clone(&args1)))
         .and_then(score);
 
     let discover = warp::get()
         .and(warp::path("discover"))
         .and(warp::path::end())
-        .and(warp::any().map(move || config.clone()))
+        .and(warp::any().map(move || Arc::clone(&args2)))
         .and_then(discover);
 
     let routes = score.or(discover);
 
-    warp::serve(routes).run(args.address).await;
+    warp::serve(routes).run(address).await;
 
     Ok(())
 }
