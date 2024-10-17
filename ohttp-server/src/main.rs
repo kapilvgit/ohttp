@@ -150,7 +150,7 @@ fn parse_cbor_key(key: &str, kid: i32) -> Res<(Option<Vec<u8>>, u8)> {
 async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String)> {
     // Check if the key configuration is in cache
     if let Some((config, token)) = cache.get(&kid).await {
-        info!("Found OHTTP configuration for KID {kid} in cache.");
+        info!("Found OHTTP configuration {} for KID {kid} in cache.", hex::encode(config.encode()?));
         return Ok((config, token));
     }
 
@@ -444,15 +444,7 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
     }
 
     match import_config(maa_url, kms_url, 0).await {
-        Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
-            &b"KID 0 missing from cache (should be impossible with local keying)"[..],
-        ))),
-
         Ok((config, _)) => match KeyConfig::encode_list(&[config]) {
-            Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
-                &b"Invalid key configuration (check KeyConfig written to initial cache)"[..],
-            ))),
-
             Ok(list) => {
                 let hex = hex::encode(list);
                 trace!("Discover config: {}", hex);
@@ -460,8 +452,16 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
                 Ok(warp::http::Response::builder()
                     .status(200)
                     .body(Vec::from(hex).into()))
-            }
+            },
+            Err(_e) => 
+                Ok(warp::http::Response::builder()
+                    .status(500)
+                    .body(Body::from(&b"Invalid key configuration (check KeyConfig written to initial cache)"[..],)))
         },
+        Err(_e) => 
+            Ok(warp::http::Response::builder()
+                .status(500)
+                .body(Body::from(&b"KID 0 missing from cache (should be impossible with local keying)"[..],)))
     }
 }
 
@@ -482,6 +482,7 @@ async fn main() -> Res<()> {
             0,
             Kem::P384Sha384,
             vec![
+                SymmetricSuite::new(Kdf::HkdfSha384, Aead::Aes256Gcm),
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
             ],
@@ -491,7 +492,7 @@ async fn main() -> Res<()> {
 
     // Build a simple subscriber that outputs to stdout
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::TRACE)
         .json()
         .finish();
 

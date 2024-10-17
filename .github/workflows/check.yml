@@ -85,3 +85,28 @@ jobs:
         if: ${{ success() || failure() }}
         run: |
           cargo clippy --tests --no-default-features --features ${{ matrix.hpke }},client,server
+
+  container-build-and-test:
+    name: Container build and test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container images
+        run: |
+          make build
+
+      - name: Run server container image
+        run: |
+          make run-server-whisper
+
+      - name: Run client image
+        run: | 
+          ./scripts/service_wait.sh 127.0.0.1:3000
+          ./scripts/service_wait.sh 127.0.0.1:9443
+          make run-client-container-local
+
+      - name: Stop containers
+        run: |
+          docker stop $(docker ps -q)
