@@ -89,16 +89,69 @@ impl Args {
 }
 
 lazy_static! {
-    static ref cache : Arc<Cache<i32, (KeyConfig, String)>> = Arc::new(Cache::builder()
-        .time_to_live(Duration::from_secs(24 * 60 * 60))
-        .build());
+    static ref cache: Arc<Cache<i32, (KeyConfig, String)>> = Arc::new(
+        Cache::builder()
+            .time_to_live(Duration::from_secs(24 * 60 * 60))
+            .build()
+    );
+}
+
+fn parse_cbor_key(key: &str, kid: i32) -> Res<(Option<Vec<u8>>, u8)> {
+    let cwk = hex::decode(key)?;
+    let cwk_map: Value = serde_cbor::from_slice(&cwk)?;
+    let mut d = None;
+    let mut returned_kid: u8 = 0;
+    if let Value::Map(map) = cwk_map {
+        for (key, value) in map {
+            if let Value::Integer(key) = key {
+                match key {
+                    // key identifier
+                    4 => {
+                        if let Value::Integer(k) = value {
+                            returned_kid = u8::try_from(k).unwrap();
+                            if kid >= 0 && i32::from(returned_kid) != kid {
+                                Err("Server returned a different KID from the one requested")?;
+                            }
+                        } else {
+                            Err("Bad key identifier in SKR response")?;
+                        }
+                    }
+
+                    // private exponent
+                    -4 => {
+                        if let Value::Bytes(vec) = value {
+                            d = Some(vec);
+                        } else {
+                            Err("Invalid secret exponent in SKR response")?;
+                        }
+                    }
+
+                    // key type, must be P-384(2)
+                    -1 => {
+                        if value == Value::Integer(2) {
+                        } else {
+                            Err("Bad CBOR key type, expected P-384(2)")?;
+                        }
+                    }
+
+                    // Ignore public key (x,y) as we recompute it from d anyway
+                    -2 | -3 => (),
+
+                    _ => Err("Unexpected field in exported private key from KMS")?,
+                };
+            };
+        }
+    } else {
+        Err("Incorrect CBOR encoding in returned private key")?;
+    };
+    Ok((d, returned_kid))
 }
 
 async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String)> {
     // Check if the key configuration is in cache
-    if let Some((config,token)) = cache.get(&kid).await {
+    if let Some((config, token)) = cache.get(&kid).await {
         info!("Found OHTTP configuration for KID {kid} in cache.");
-        return Ok((config,token));
+        return Ok((config, token));
     }
 
     // Get MAA token from CVM guest attestation library
@@ -118,8 +171,12 @@ async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String
     let key: String;
 
     loop {
-        // kid<0 will get the latest, this is used by the discover endpoint
-        let url = if kid>=0 { format!("{kms}?kid={kid}") }else{ kms.to_owned() };
+        // kid < 0 will get the latest, this is used by the discover endpoint
+        let url = if kid >= 0 {
+            format!("{kms}?kid={kid}")
+        } else {
+            kms.to_owned()
+        };
         info!("Sending SKR request to {url}");
 
         // Get HPKE private key from Azure KMS
@@ -144,82 +201,39 @@ async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String
                 } else {
                     Err("Max retries reached, giving up. Cannot reach key management service")?;
                 }
-            },
+            }
             200 => {
                 let skr_body = response.text().await?;
                 info!("SKR successful {}", skr_body);
 
                 let skr: ExportedKey = from_str(&skr_body)?;
-                trace!("requested KID={}, returned KID={}, Receipt={}", kid, skr.kid, skr.receipt);
+                trace!(
+                    "requested KID={}, returned KID={}, Receipt={}",
+                    kid,
+                    skr.kid,
+                    skr.receipt
+                );
 
-                if kid >= 0 && skr.kid as i32 != kid {
-                    Err("KMS returned a different key ID from the one requested")?
+                if kid >= 0 && i32::from(skr.kid) != kid {
+                    Err("KMS returned a different key ID from the one requested")?;
                 }
 
                 key = skr.key;
                 break;
-            },
+            }
             e => {
                 info!("KMS returned an unexpected status code: {e}");
-                key = "".to_string();
-                break
+                key = String::new();
+                break;
             }
         }
     }
 
-    let cwk = hex::decode(&key)?;
-    let cwk_map: Value = serde_cbor::from_slice(&cwk)?;
-    let mut d = None;
-    let mut returned_kid : u8 = 0;
-
-    // Parse the returned CBOR key (in CWK-like format)
-    if let Value::Map(map) = cwk_map {
-        for (key, value) in map {
-            if let Value::Integer(key) = key {
-                match key {
-                    // key identifier
-                    4 => {
-                        if let Value::Integer(k) = value {
-                            returned_kid = u8::try_from(k).unwrap();
-                            if kid >=0 && returned_kid as i32 != kid {
-                                Err("Server returned a different KID from the one requested")?;
-                            }
-                        } else {
-                            Err("Bad key identifier in SKR response")?
-                        }
-                    }
-
-                    // private exponent
-                    -4 => {
-                        if let Value::Bytes(vec) = value {
-                            d = Some(vec);
-                        } else {
-                            Err("Invalid secret exponent in SKR response")?
-                        }
-                    }
-
-                    // key type, must be P-384(2)
-                    -1 => {
-                        if value == Value::Integer(2) {
-                        } else {
-                            Err("Bad CBOR key type, expected P-384(2)")?
-                        }
-                    }
-
-                    // Ignore public key (x,y) as we recompute it from d anyway
-                    -2 | -3 => (),
-
-                    _ => Err("Unexpected field in exported private key from KMS")?,
-                };
-            };
-        }
-    } else {
-        Err("Incorrect CBOR encoding in returned private key")?;
-    };
+    let (d, returned_kid) = parse_cbor_key(&key, kid)?;
 
     let sk = match d {
         Some(key) => <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::PrivateKey::from_bytes(&key),
-        None => Err("Private key missing from SKR response")?
+        None => Err("Private key missing from SKR response")?,
     }?;
     let pk = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&sk);
 
@@ -317,7 +331,6 @@ async fn score(
     body: warp::hyper::body::Bytes,
     args: Arc<Args>,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
-
     let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
     let maa_url = args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
     let mode = args.mode();
@@ -330,28 +343,30 @@ async fn score(
 
     for (key, value) in &headers {
         info!("{}: {}", key, value.to_str().unwrap());
-        if key == "x-attestation-token" { return_token = true; }
+        if key == "x-attestation-token" {
+            return_token = true;
+        }
     }
 
     // The KID is normally the first byte of the request
-    let kid : i32 = match body.get(0).copied() {
+    let kid = match body.first().copied() {
         None => -1,
-        Some(kid) => kid as i32
+        Some(kid) => i32::from(kid),
     };
 
-    let ohttp =
-        if args.local_key && kid != 0 {
-            info!("Ignoring non-0 KID {kid} with local keying configuration");
-            None
-        } else {
-            match import_config(&maa_url, &kms_url, kid).await {
-                Ok((config,token)) => match OhttpServer::new(config) {
-                    Ok(ohttp) => Some((ohttp,token)),
-                    _ => None
-                },
-                _ => { info!("Failed to load KID {kid} from KMS"); None }
-            }
-        };
+    let ohttp = if args.local_key && kid != 0 {
+        info!("Ignoring non-0 KID {kid} with local keying configuration");
+        None
+    } else if let Ok((config, token)) = import_config(&maa_url, &kms_url, kid).await {
+        match OhttpServer::new(config) {
+            Ok(ohttp) => Some((ohttp, token)),
+            _ => None,
+        }
+    }
+    else {
+        info!("Failed to load KID {kid} from KMS");
+        None
+    };
 
     match ohttp {
       None => Ok(warp::http::Response::builder()
@@ -424,22 +439,21 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
 
     // The discovery endpoint is only enabled for local testing
     if !args.local_key {
-        return Ok(warp::http::Response::builder().status(404).body(Body::from(&b"Not found"[..])));
+        return Ok(warp::http::Response::builder()
+            .status(404)
+            .body(Body::from(&b"Not found"[..])));
     }
 
     match import_config(maa_url, kms_url, 0).await {
-        Err(_e) =>
-          Ok(warp::http::Response::builder()
-          .status(500)
-          .body(Body::from(&b"KID 0 missing from cache (should be impossible with local keying)"[..]))),
-  
-        Ok((config, _)) =>
-          match KeyConfig::encode_list(&[config]) {
-            Err(_e) =>
-              Ok(warp::http::Response::builder()
-              .status(500)
-              .body(Body::from(&b"Invalid key configuration (check KeyConfig written to initial cache)"[..]))),
-  
+        Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
+            &b"KID 0 missing from cache (should be impossible with local keying)"[..],
+        ))),
+
+        Ok((config, _)) => match KeyConfig::encode_list(&[config]) {
+            Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
+                &b"Invalid key configuration (check KeyConfig written to initial cache)"[..],
+            ))),
+
             Ok(list) => {
                 let hex = hex::encode(list);
                 trace!("Discover config: {}", hex);
@@ -448,7 +462,7 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
                     .status(200)
                     .body(Vec::from(hex).into()))
             }
-        }
+        },
     }
 }
 
@@ -456,7 +470,7 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
 async fn main() -> Res<()> {
     let args = Args::parse();
     let is_local = args.local_key;
-    let address = args.address.clone();
+    let address = args.address;
 
     let argsc = Arc::new(args);
     let args1 = Arc::clone(&argsc);
@@ -471,8 +485,9 @@ async fn main() -> Res<()> {
             vec![
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
-            ])?;
-        cache.insert(0, (config, "".to_owned())).await;
+            ],
+        )?;
+        cache.insert(0, (config, String::new())).await;
     }
 
     // Build a simple subscriber that outputs to stdout

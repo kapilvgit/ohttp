@@ -14,19 +14,18 @@ extern "C" {
 
 pub fn attest(data: &[u8], pcrs: u32, endpoint_url: &str) -> Result<Vec<u8>, String> {
     match CString::new(endpoint_url) {
-      Ok(endpoint_url_cstring) =>
-        unsafe {
+        Ok(endpoint_url_cstring) => unsafe {
             let url_ptr = endpoint_url_cstring.as_ptr();
             let mut dstlen = 32 * 1024;
             let mut dst = Vec::with_capacity(dstlen);
             let pdst = dst.as_mut_ptr();
             if get_attestation_token(data.as_ptr(), pcrs, pdst, &mut dstlen, url_ptr) == 0 {
-              dst.set_len(dstlen);
-              Ok(dst)
+                dst.set_len(dstlen);
+                Ok(dst)
             } else {
-              Err("CVM guest attestation library returned a non-0 code.".to_owned())
+                Err("CVM guest attestation library returned a non-0 code.".to_owned())
             }
         },
-      _e => Err("Failed to convert endpoint URL to CString.".to_owned())
+        _e => Err("Failed to convert endpoint URL to CString.".to_owned()),
     }
 }
