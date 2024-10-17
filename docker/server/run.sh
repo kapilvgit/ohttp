@@ -19,14 +19,14 @@ if [[ -z ${TARGET} ]]; then
 fi
 
 if is_valid_url $TARGET; then 
-  CMD="RUST_LOG=info /usr/local/bin/ohttp-server --target $TARGET"
+  CMD="RUST_LOG=trace /usr/local/bin/ohttp-server --target $TARGET"
 else
   echo "TARGET is not a valid URL"
   exit 1
 fi
 
-if [[ -z ${INSTANCE_SPECIFIC_KEY} ]]; then
-  CMD="$CMD --attest"
+if [[ -n ${INSTANCE_SPECIFIC_KEY} ]]; then
+  CMD="$CMD --local-key"
 fi
 
 if [[ -n ${INJECT_HEADERS} ]]; then 

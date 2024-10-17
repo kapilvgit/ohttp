@@ -22,6 +22,7 @@ endif
 	
 export INPUT ?= ./examples/audio.mp3
 export INJECT_HEADERS ?= openai-internal-enableasrsupport
+export DETACHED ?= -d
 
 # Build commands
 
@@ -69,7 +70,7 @@ run-whisper-faster:
 	docker run --network=host fedirz/faster-whisper-server:latest-cuda
 
 run-server-whisper:
-	docker compose -f ./docker/docker-compose-whisper.yml up -d
+	docker compose -f ./docker/docker-compose-whisper.yml up ${DETACHED}
 
 run-server-faster:
 	docker compose -f ./docker/docker-compose-faster-whisper.yml up
