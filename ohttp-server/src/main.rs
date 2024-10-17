@@ -362,8 +362,7 @@ async fn score(
             Ok(ohttp) => Some((ohttp, token)),
             _ => None,
         }
-    }
-    else {
+    } else {
         info!("Failed to load KID {kid} from KMS");
         None
     };
