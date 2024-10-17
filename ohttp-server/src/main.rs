@@ -62,9 +62,9 @@ struct Args {
     #[arg(long, short = 't', default_value = "http://127.0.0.1:8000")]
     target: Url,
 
-    /// Obtain key configuration from a KMS after attestation
-    #[arg(long, short = 'a', default_value_t = true)]
-    attest: bool,
+    /// Use locally generated key, for testing without KMS
+    #[arg(long, short = 'l')]
+    local_key: bool,
 
     /// MAA endpoint
     #[arg(long, short = 'm')]
@@ -89,16 +89,16 @@ impl Args {
 }
 
 lazy_static! {
-    static ref cache : Arc<Cache<i32, KeyConfig>> = Arc::new(Cache::builder()
+    static ref cache : Arc<Cache<i32, (KeyConfig, String)>> = Arc::new(Cache::builder()
         .time_to_live(Duration::from_secs(24 * 60 * 60))
         .build());
 }
 
-async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<KeyConfig> {
+async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String)> {
     // Check if the key configuration is in cache
-    if let Some(config) = cache.get(&kid).await {
+    if let Some((config,token)) = cache.get(&kid).await {
         info!("Found OHTTP configuration for KID {kid} in cache.");
-        return Ok(config);
+        return Ok((config,token));
     }
 
     // Get MAA token from CVM guest attestation library
@@ -235,8 +235,8 @@ async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<KeyConfig> {
         ],
     )?;
 
-    cache.insert(kid, config.clone()).await;
-    Ok(config)
+    cache.insert(kid, (config.clone(), token.clone())).await;
+    Ok((config, token))
 }
 
 async fn generate_reply(
@@ -323,29 +323,42 @@ async fn score(
     let mode = args.mode();
     let target = args.target.clone();
     let inject_request_headers = args.inject_request_headers.clone();
+    let mut return_token = false;
 
     info!("Received encapsulated score request for target {}", target);
     info!("Request headers");
+
     for (key, value) in &headers {
         info!("{}: {}", key, value.to_str().unwrap());
+        if key == "x-attestation-token" { return_token = true; }
     }
 
-    let kid : i32 = match body.get(0).copied() {None => -1, Some(kid) => kid as i32};
-
-    let ohttp = match import_config(&maa_url, &kms_url, kid).await {
-      Ok(config) => match OhttpServer::new(config) {
-        Ok(ohttp) => Some(ohttp),
-        _ => None
-      },
-      _ => None
+    // The KID is normally the first byte of the request
+    let kid : i32 = match body.get(0).copied() {
+        None => -1,
+        Some(kid) => kid as i32
     };
+
+    let ohttp =
+        if args.local_key && kid != 0 {
+            info!("Ignoring non-0 KID {kid} with local keying configuration");
+            None
+        } else {
+            match import_config(&maa_url, &kms_url, kid).await {
+                Ok((config,token)) => match OhttpServer::new(config) {
+                    Ok(ohttp) => Some((ohttp,token)),
+                    _ => None
+                },
+                _ => { info!("Failed to load KID {kid} from KMS"); None }
+            }
+        };
 
     match ohttp {
       None => Ok(warp::http::Response::builder()
                 .status(500)
                 .body(Body::from(&b"Failed to get or load the OHTTP coniguration from local cache or key management service."[..]))),
 
-      Some(ohttp) => {
+      Some((ohttp,token)) => {
         let inject_headers = compute_injected_headers(&headers, inject_request_headers);
         let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode).await;
 
@@ -353,6 +366,12 @@ async fn score(
             Ok((response, server_response)) => {
                 let mut builder =
                     warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+
+                // Add HTTP header with MAA token, for client auditing.
+                if return_token {
+                    builder = builder.header(HeaderName::from_static("x-attestation-token"), token.clone());
+                }
 
                 // Move headers from the inner response into the outer response
                 info!("Response headers:");
@@ -399,23 +418,27 @@ async fn score(
     }
 }
 
-#[allow(clippy::unused_async)]
 async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Infallible> {
     let kms_url = &args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
     let maa_url = &args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
 
-    match import_config(maa_url, kms_url, -1).await {
+    // The discovery endpoint is only enabled for local testing
+    if !args.local_key {
+        return Ok(warp::http::Response::builder().status(404).body(Body::from(&b"Not found"[..])));
+    }
+
+    match import_config(maa_url, kms_url, 0).await {
         Err(_e) =>
           Ok(warp::http::Response::builder()
           .status(500)
-          .body(Body::from(&b"Failed to get OHTTP coniguration from local cache or key management service. The key ID of the request may be invalid or expired."[..]))),
+          .body(Body::from(&b"KID 0 missing from cache (should be impossible with local keying)"[..]))),
   
-        Ok(config) =>
+        Ok((config, _)) =>
           match KeyConfig::encode_list(&[config]) {
             Err(_e) =>
               Ok(warp::http::Response::builder()
               .status(500)
-              .body(Body::from(&b"Failed to get OHTTP coniguration from local cache or key management service. The key ID of the request may be invalid or expired."[..]))),
+              .body(Body::from(&b"Invalid key configuration (check KeyConfig written to initial cache)"[..]))),
   
             Ok(list) => {
                 let hex = hex::encode(list);
@@ -432,11 +455,25 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
 #[tokio::main]
 async fn main() -> Res<()> {
     let args = Args::parse();
+    let is_local = args.local_key;
     let address = args.address.clone();
+
     let argsc = Arc::new(args);
     let args1 = Arc::clone(&argsc);
     let args2 = Arc::clone(&argsc);
     ::ohttp::init();
+
+    // Generate a fresh key for local testing. KID is set to 0.
+    if is_local {
+        let config = KeyConfig::new(
+            0,
+            Kem::P384Sha384,
+            vec![
+                SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
+                SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
+            ])?;
+        cache.insert(0, (config, "".to_owned())).await;
+    }
 
     // Build a simple subscriber that outputs to stdout
     let subscriber = FmtSubscriber::builder()
@@ -462,7 +499,6 @@ async fn main() -> Res<()> {
         .and_then(discover);
 
     let routes = score.or(discover);
-
     warp::serve(routes).run(address).await;
 
     Ok(())
