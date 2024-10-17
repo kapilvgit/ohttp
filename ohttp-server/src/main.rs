@@ -150,7 +150,10 @@ fn parse_cbor_key(key: &str, kid: i32) -> Res<(Option<Vec<u8>>, u8)> {
 async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String)> {
     // Check if the key configuration is in cache
     if let Some((config, token)) = cache.get(&kid).await {
-        info!("Found OHTTP configuration {} for KID {kid} in cache.", hex::encode(config.encode()?));
+        info!(
+            "Found OHTTP configuration {} for KID {kid} in cache.",
+            hex::encode(config.encode()?)
+        );
         return Ok((config, token));
     }
 
@@ -452,16 +455,14 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
                 Ok(warp::http::Response::builder()
                     .status(200)
                     .body(Vec::from(hex).into()))
-            },
-            Err(_e) => 
-                Ok(warp::http::Response::builder()
-                    .status(500)
-                    .body(Body::from(&b"Invalid key configuration (check KeyConfig written to initial cache)"[..],)))
+            }
+            Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
+                &b"Invalid key configuration (check KeyConfig written to initial cache)"[..],
+            ))),
         },
-        Err(_e) => 
-            Ok(warp::http::Response::builder()
-                .status(500)
-                .body(Body::from(&b"KID 0 missing from cache (should be impossible with local keying)"[..],)))
+        Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
+            &b"KID 0 missing from cache (should be impossible with local keying)"[..],
+        ))),
     }
 }
 
