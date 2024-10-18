@@ -6,7 +6,7 @@ services:
     network_mode: "host"
     environment:
       - TARGET=${TARGET}
-      - INSTANCE_SPECIFIC_KEY=1
+      - LOCAL_KEY=1
     depends_on:
       - whisper
 

@@ -26,6 +26,12 @@ export DETACHED ?= -d
 
 # Build commands
 
+build-server-local:
+	cargo build --bin ohttp-server
+
+build-client-local:
+	cargo build --bin ohttp-client
+
 build-whisper:
 	docker build -f docker/whisper/Dockerfile -t whisper-api ./docker/whisper
 
@@ -35,15 +41,10 @@ build-server:
 build-client:
 	docker build -f docker/client/Dockerfile -t ohttp-client .
 
-build-streaming:
-	docker build -f docker/streaming/Dockerfile -t nodejs-streaming .
 
 build: build-server build-client build-whisper
 
 # Local server deployments
-
-run-server:
-	cargo run --bin ohttp-server -- --target ${TARGET}
 
 run-server-attest:
 	cargo run --bin ohttp-server -- --certificate ./ohttp-server/server.crt \
@@ -55,9 +56,9 @@ run-server-attest:
 run-server-container: 
 	docker compose -f ./docker/docker-compose-server.yml up
 
-run-server-container-attest: 
+run-server-container-cvm: 
 	docker run --privileged --net=host \
-	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} \
+	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e KMS_URL=${KMS} -e INJECT_HEADERS=${INJECT_HEADERS} \
 	--mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security \
 	--device /dev/tpmrm0  ohttp-server
 
@@ -86,7 +87,7 @@ verify-quote:
 run-client-local:
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  -H "api-key: test123" --config `curl -s http://localhost:9443/discover` 
+  --config `curl -s http://localhost:9443/discover` 
 
 run-client-kms: service-cert 
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
@@ -103,7 +104,8 @@ run-client-kms-aoai: service-cert
 	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
   --kms-cert ./service_cert.pem \
-  -H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' -O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
+  -H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
+	-O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
 
 # Containerized client deployments
 
