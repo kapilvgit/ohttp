@@ -14,7 +14,7 @@ else ifeq ($(MODEL), whisper_aoai_local)
 else ifeq ($(MODEL), whisper_aoai)
 	TARGET ?= http://127.0.0.1:5002
 	TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
-	DEPLOYMENT ?= 'arthig-deploy16'
+	DEPLOYMENT ?= 'arthig-deploy20'
 	SCORING_ENDPOINT ?= 'https://arthig-ep.eastus2.inference.ml.azure.com/score'
 else
 	echo "Unknown model"
@@ -57,7 +57,7 @@ run-server-container:
 
 run-server-container-attest: 
 	docker run --privileged --net=host \
-	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} \
+	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e MAA_URL=${MAA} -e INJECT_HEADERS=${INJECT_HEADERS} \
 	--mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security \
 	--device /dev/tpmrm0  ohttp-server
 
