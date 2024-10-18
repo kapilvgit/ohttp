@@ -27,7 +27,7 @@ pub enum Error {
     #[error("Bad key identifier in SKR response")]
     KMSKeyId,
     #[error("KMS returned a different key ID from the one requested : {0} {1}")]
-    KMSKeyIdMismatch(u8, i32),
+    KMSKeyIdMismatch(u8, u8),
     #[error("Invalid secret exponent in SKR response")]
     KMSExponent,
     #[error("Invalid private key")]

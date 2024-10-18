@@ -41,8 +41,11 @@ build-server:
 build-client:
 	docker build -f docker/client/Dockerfile -t ohttp-client .
 
-
 build: build-server build-client build-whisper
+
+format-checks:
+	cargo fmt --all -- --check --config imports_granularity=Crate
+	cargo clippy --tests --no-default-features --features rust-hpke,client,server
 
 # Local server deployments
 
