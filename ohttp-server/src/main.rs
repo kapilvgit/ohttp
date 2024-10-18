@@ -42,8 +42,8 @@ struct ExportedKey {
     receipt: String,
 }
 
-const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.com/key";
-const DEFAULT_MAA_URL: &str = "https://sharedeus2.eus2.attest.azure.net";
+const DEFAULT_KMS_URL: &str = "https://accconfinferencedebug.confidential-ledger.azure.com";
+const DEFAULT_MAA_URL: &str = "https://maanosecureboottestyfu.eus.attest.azure.net";
 const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 
 #[derive(Debug, Parser, Clone)]

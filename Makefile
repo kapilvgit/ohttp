@@ -1,4 +1,4 @@
-KMS ?= https://acceu-aml-504.confidential-ledger.azure.com
+KMS ?= https://accconfinferencedebug.confidential-ledger.azure.com
 MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
 
 # MODEL can be whisper_opensource, whisper_aoai or whisper_aoai_local
@@ -50,9 +50,8 @@ format-checks:
 # Local server deployments
 
 run-server-attest:
-	cargo run --bin ohttp-server -- --certificate ./ohttp-server/server.crt \
-		--key ./ohttp-server/server.key --target ${TARGET} \
-		--attest --maa_url ${MAA} --kms_url ${KMS}
+	cargo run --bin ohttp-server -- --target ${TARGET} \
+		--maa_url ${MAA} --kms_url ${KMS}
 
 # Containerized server deployments
 
@@ -61,7 +60,7 @@ run-server-container:
 
 run-server-container-cvm: 
 	docker run --privileged --net=host \
-	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e KMS_URL=${KMS} -e INJECT_HEADERS=${INJECT_HEADERS} \
+	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e KMS_URL=${KMS}/app/key -e INJECT_HEADERS=${INJECT_HEADERS} \
 	--mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security \
 	--device /dev/tpmrm0  ohttp-server
 
