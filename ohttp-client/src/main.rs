@@ -237,17 +237,39 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
         .build()?;
 
     info!("Contacting key management service at {kms_url}...");
+    let max_retries = 3;
+    let mut retries = 0;
+    let url = kms_url + "/listpubkeys";
 
-    // Make the GET request
-    let response = client
-        .get(kms_url + "/listpubkeys")
-        .send()
-        .await?
-        .error_for_status()?;
+    loop {
+        // Make the GET request
+        let response = client.get(url.clone()).send().await?.error_for_status()?;
 
-    let body = response.text().await?;
-    assert!(!body.is_empty());
-    Ok(body)
+        // We may have to wait for receipt to be ready
+        match response.status().as_u16() {
+            202 => {
+                if retries < max_retries {
+                    retries += 1;
+                    trace!(
+                        "Received 202 status code, retrying... (attempt {}/{})",
+                        retries,
+                        max_retries
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                } else {
+                    Err("Max retries reached, giving up. Cannot reach key management service")?;
+                }
+            }
+            200 => {
+                let body = response.text().await?;
+                assert!(!body.is_empty());
+                return Ok(body);
+            }
+            e => {
+                Err(format!("KMS returned unexpected {} status code.", e))?;
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -393,7 +415,6 @@ async fn main() -> Res<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .with_file(true)
         .with_line_number(true)
-        .json()
         .finish();
 
     // Set the subscriber as global default

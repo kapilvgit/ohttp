@@ -1,5 +1,9 @@
 use libc::{c_char, c_int, size_t};
+use ohttp::Error;
 use std::ffi::CString;
+use tracing::error;
+
+type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[link(name = "azguestattestation")]
 extern "C" {
@@ -12,15 +16,27 @@ extern "C" {
     ) -> c_int;
 }
 
-pub fn attest(data: &[u8], pcrs: u32, endpoint_url: &str) -> Option<Vec<u8>> {
-    let endpoint_url_cstring = CString::new(endpoint_url).expect("CString::new failed");
-    unsafe {
-        let url_ptr = endpoint_url_cstring.as_ptr();
-        let mut dstlen = 32 * 1024;
-        let mut dst = Vec::with_capacity(dstlen);
-        let pdst = dst.as_mut_ptr();
-        let res = get_attestation_token(data.as_ptr(), pcrs, pdst, &mut dstlen, url_ptr);
-        dst.set_len(dstlen);
-        (res == 0).then_some(dst)
+pub fn attest(data: &[u8], pcrs: u32, endpoint_url: &str) -> Res<Vec<u8>> {
+    match CString::new(endpoint_url) {
+        Ok(endpoint_url_cstring) => unsafe {
+            let mut dstlen = 32 * 1024;
+            let mut dst = Vec::with_capacity(dstlen);
+            let pdst = dst.as_mut_ptr();
+
+            let url_ptr = endpoint_url_cstring.as_ptr();
+
+            let ret = get_attestation_token(data.as_ptr(), pcrs, pdst, &mut dstlen, url_ptr);
+            if ret == 0 {
+                dst.set_len(dstlen);
+                Ok(dst)
+            } else {
+                error!("{}", Error::MAAToken(ret));
+                Err(Box::new(Error::MAAToken(ret)))
+            }
+        },
+        _e => {
+            error!("{}", Error::Attest);
+            Err(Box::new(Error::Attest))
+        }
     }
 }
