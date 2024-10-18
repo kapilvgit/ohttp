@@ -25,7 +25,7 @@ else
   exit 1
 fi
 
-if [[ -n ${INSTANCE_SPECIFIC_KEY} ]]; then
+if [[ -n ${LOCAL_KEY} ]]; then
   CMD="$CMD --local-key"
 fi
 
