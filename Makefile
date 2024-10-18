@@ -14,7 +14,7 @@ else ifeq ($(MODEL), whisper_aoai_local)
 else ifeq ($(MODEL), whisper_aoai)
 	TARGET ?= http://127.0.0.1:5002
 	TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
-	DEPLOYMENT ?= 'arthig-deploy16'
+	DEPLOYMENT ?= 'arthig-deploy20'
 	SCORING_ENDPOINT ?= 'https://arthig-ep.eastus2.inference.ml.azure.com/score'
 else
 	echo "Unknown model"
