@@ -357,13 +357,7 @@ async fn score(
     info!("Received encapsulated score request for target {}", target);
 
     info!("Request headers length = {}", headers.len());
-    let mut return_token = false;
-    for (key, value) in &headers {
-        info!("    {}: {}", key, value.to_str().unwrap());
-        if key == "x-attestation-token" {
-            return_token = true;
-        }
-    }
+    let return_token = headers.contains_key("x-attestation-token");
 
     // The KID is normally the first byte of the request
     let kid = match body.first().copied() {
@@ -408,62 +402,59 @@ async fn score(
     }
 
     let mode = args.mode();
-    let reply = generate_reply(&ohttp, inject_headers, &body[..], target, mode).await;
-
-    match reply {
-        Ok((response, server_response)) => {
-            let mut builder =
-                warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
-
-            // Add HTTP header with MAA token, for client auditing.
-            if return_token {
-                builder = builder.header(
-                    HeaderName::from_static("x-attestation-token"),
-                    token.clone(),
-                );
-            }
-
-            // Move headers from the inner response into the outer response
-            info!("Response headers:");
-            for (key, value) in response.headers() {
-                if !FILTERED_RESPONSE_HEADERS
-                    .iter()
-                    .any(|h| h.eq_ignore_ascii_case(key.as_str()))
-                {
-                    info!(
-                        "    {}: {}",
-                        key,
-                        std::str::from_utf8(value.as_bytes()).unwrap()
-                    );
-                    builder = builder.header(key.as_str(), value.as_bytes());
+    let (response, server_response) =
+        match generate_reply(&ohttp, inject_headers, &body[..], target, mode).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("400 {}", e.to_string());
+                if let Ok(oe) = e.downcast::<::ohttp::Error>() {
+                    return Ok(warp::http::Response::builder()
+                        .status(422)
+                        .body(Body::from(format!("Error: {oe:?}"))));
                 }
-            }
 
-            let stream = Box::pin(unfold(response, |mut response| async move {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => {
-                        Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response))
-                    }
-                    _ => None,
-                }
-            }));
-
-            let stream = server_response.encapsulate_stream(stream);
-            Ok(builder.body(Body::wrap_stream(stream)))
-        }
-        Err(e) => {
-            error!("400 {}", e.to_string());
-            if let Ok(oe) = e.downcast::<::ohttp::Error>() {
-                Ok(warp::http::Response::builder()
-                    .status(422)
-                    .body(Body::from(format!("Error: {oe:?}"))))
-            } else {
-                Ok(warp::http::Response::builder()
+                return Ok(warp::http::Response::builder()
                     .status(400)
-                    .body(Body::from(&b"Request error"[..])))
+                    .body(Body::from(&b"Request error"[..])));
             }
+        };
+
+    let mut builder =
+        warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+    // Add HTTP header with MAA token, for client auditing.
+    if return_token {
+        builder = builder.header(
+            HeaderName::from_static("x-attestation-token"),
+            token.clone(),
+        );
+    }
+
+    // Move headers from the inner response into the outer response
+    info!("Response headers:");
+    for (key, value) in response.headers() {
+        if !FILTERED_RESPONSE_HEADERS
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(key.as_str()))
+        {
+            info!(
+                "    {}: {}",
+                key,
+                std::str::from_utf8(value.as_bytes()).unwrap()
+            );
+            builder = builder.header(key.as_str(), value.as_bytes());
         }
     }
+
+    let stream = Box::pin(unfold(response, |mut response| async move {
+        match response.chunk().await {
+            Ok(Some(chunk)) => Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response)),
+            _ => None,
+        }
+    }));
+
+    let stream = server_response.encapsulate_stream(stream);
+    Ok(builder.body(Body::wrap_stream(stream)))
 }
 
 async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Infallible> {
