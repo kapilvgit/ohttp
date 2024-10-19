@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -yq openssl libssl-dev libtss2-dev
 WORKDIR /usr/src/ohttp
 COPY . .
 RUN ln -s /usr/src/ohttp/ohttp-server/libazguestattestation.so.1.0.5 /usr/lib/libazguestattestation.so
-RUN cargo install --path ohttp-server
+RUN cargo install --path ohttp-server --debug
 
 FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y ca-certificates openssl libssl-dev libtss2-dev && rm -rf /var/lib/apt/lists/*

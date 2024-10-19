@@ -18,9 +18,9 @@ if [[ -z ${TARGET} ]]; then
   exit 1
 fi
 
-CMD="RUST_LOG=info"
+CMD="RUST_BACKTRACE=1 RUST_LOG=info"
 if [[ -n ${TRACE} ]]; then
-  CMD="RUST_LOG=trace"
+  CMD="RUST_BACKTRACE=1 RUST_LOG=trace"
 fi
 
 if is_valid_url $TARGET; then 

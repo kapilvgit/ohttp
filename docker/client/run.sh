@@ -28,7 +28,7 @@ if [[ -z ${INPUT} ]]; then
   exit 1
 fi
 
-CMD="RUST_LOG=info /usr/local/bin/ohttp-client ${SCORING_ENDPOINT} --target-path ${TARGET_PATH} -F \"file=@${INPUT}\""
+CMD="RUST_BACKTRACE=1 RUST_LOG=info /usr/local/bin/ohttp-client ${SCORING_ENDPOINT} --target-path ${TARGET_PATH} -F \"file=@${INPUT}\""
 
 if [[ -n ${KMS_URL} ]]; then 
   if is_valid_url $KMS_URL; then 
