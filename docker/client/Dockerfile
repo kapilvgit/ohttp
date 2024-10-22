@@ -8,7 +8,7 @@ gyp ninja-build pkg-config zlib1g-dev libssl-dev
 
 WORKDIR /usr/src/ohttp
 COPY . .
-RUN cargo install --path ohttp-client
+RUN cargo install --path ohttp-client --debug
 
 FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y ca-certificates openssl curl jq && rm -rf /var/lib/apt/lists/*

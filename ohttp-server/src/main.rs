@@ -1,5 +1,7 @@
 #![deny(clippy::pedantic)]
 
+pub mod err;
+
 use std::{io::Cursor, net::SocketAddr, sync::Arc};
 
 use lazy_static::lazy_static;
@@ -30,10 +32,62 @@ use serde_cbor::Value;
 use serde_json::from_str;
 
 use hpke::Deserializable;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use err::ServerError;
 use tracing::{error, info, trace};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
+use backtrace::Backtrace;
+
+#[derive(Serialize)]
+struct BacktraceFrame {
+    index: usize,
+    address: String,
+    name: Option<String>,
+    file: Option<String>,
+    line: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct BacktraceJson {
+    frames: Vec<BacktraceFrame>,
+}
+
+fn capture_backtrace() -> BacktraceJson {
+    let bt = Backtrace::new();
+    let frames = bt
+        .frames()
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            let symbols = frame.symbols();
+            BacktraceFrame {
+                index,
+                address: format!("{:p}", frame.ip()),
+                name: symbols
+                    .first()
+                    .and_then(backtrace::BacktraceSymbol::name)
+                    .map(|n| format!("{n:?}")),
+                file: symbols
+                    .first()
+                    .and_then(|s| s.filename())
+                    .map(|f| f.display().to_string()),
+                line: symbols.first().and_then(backtrace::BacktraceSymbol::lineno),
+            }
+        })
+        .collect();
+
+    BacktraceJson { frames }
+}
+
+macro_rules! error_with_backtrace {
+    ($e:expr) => {{
+        let backtrace = capture_backtrace();
+        let json_backtrace = serde_json::to_string_pretty(&backtrace).expect("Failed to serialize backtrace");
+        error!("An error occurred: {} Backtrace:\n{}", $e, json_backtrace);
+    }};
+}
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -42,7 +96,7 @@ struct ExportedKey {
     receipt: String,
 }
 
-const DEFAULT_KMS_URL: &str = "https://accconfinferencedebug.confidential-ledger.azure.com";
+const DEFAULT_KMS_URL: &str = "https://accconfinferencedebug.confidential-ledger.azure.com/app/key";
 const DEFAULT_MAA_URL: &str = "https://maanosecureboottestyfu.eus.attest.azure.net";
 const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 
@@ -50,8 +104,7 @@ const FILTERED_RESPONSE_HEADERS: [&str; 2] = ["content-type", "content-length"];
 #[command(name = "ohttp-server", about = "Serve oblivious HTTP requests.")]
 struct Args {
     /// The address to bind to.
-    // #[arg(default_value = "127.0.0.1:9443")]
-    #[arg(default_value = "0.0.0.0:9443")]
+    #[arg(default_value = "127.0.0.1:9443")]
     address: SocketAddr,
 
     /// When creating message/bhttp, use the indeterminate-length form.
@@ -110,12 +163,10 @@ fn parse_cbor_key(key: &str, kid: u8) -> Res<(Option<Vec<u8>>, u8)> {
                         if let Value::Integer(k) = value {
                             returned_kid = u8::try_from(k).unwrap();
                             if returned_kid != kid {
-                                error!("{}", Error::KMSKeyIdMismatch(returned_kid, kid));
-                                return Err(Box::new(Error::KMSKeyIdMismatch(returned_kid, kid)));
+                                return Err(Box::new(Error::KeyIdMismatch(returned_kid, kid)));
                             }
                         } else {
-                            error!("{}", Error::KMSKeyId);
-                            return Err(Box::new(Error::KMSKeyId));
+                            return Err(Box::new(ServerError::KMSKeyId));
                         }
                     }
 
@@ -124,8 +175,7 @@ fn parse_cbor_key(key: &str, kid: u8) -> Res<(Option<Vec<u8>>, u8)> {
                         if let Value::Bytes(vec) = value {
                             d = Some(vec);
                         } else {
-                            error!("{}", Error::KMSExponent);
-                            return Err(Box::new(Error::KMSExponent));
+                            return Err(Box::new(ServerError::KMSExponent));
                         }
                     }
 
@@ -133,8 +183,7 @@ fn parse_cbor_key(key: &str, kid: u8) -> Res<(Option<Vec<u8>>, u8)> {
                     -1 => {
                         if value == Value::Integer(2) {
                         } else {
-                            error!("{}", Error::KMSCBORKeyType);
-                            return Err(Box::new(Error::KMSCBORKeyType));
+                            return Err(Box::new(ServerError::KMSCBORKeyType));
                         }
                     }
 
@@ -142,15 +191,13 @@ fn parse_cbor_key(key: &str, kid: u8) -> Res<(Option<Vec<u8>>, u8)> {
                     -2 | -3 => (),
 
                     _ => {
-                        error!("{}", Error::KMSField);
-                        return Err(Box::new(Error::KMSField));
+                        return Err(Box::new(ServerError::KMSField));
                     }
                 };
             };
         }
     } else {
-        error!("{}", Error::KMSCBOREncoding);
-        return Err(Box::new(Error::KMSCBOREncoding));
+        return Err(Box::new(ServerError::KMSCBOREncoding));
     };
     Ok((d, returned_kid))
 }
@@ -201,13 +248,12 @@ async fn get_hpke_private_key_from_kms(kms: &str, kid: u8, token: &str) -> Res<S
                     );
                     sleep(Duration::from_secs(1)).await;
                 } else {
-                    error!("{}", Error::KMSUnreachable);
-                    return Err(Box::new(Error::KMSUnreachable));
+                    return Err(Box::new(ServerError::KMSUnreachable));
                 }
             }
             200 => {
                 let skr_body = response.text().await?;
-                info!("SKR successful {}", skr_body);
+                info!("SKR successful");
 
                 let skr: ExportedKey = from_str(&skr_body)?;
                 trace!(
@@ -218,15 +264,13 @@ async fn get_hpke_private_key_from_kms(kms: &str, kid: u8, token: &str) -> Res<S
                 );
 
                 if skr.kid != kid {
-                    error!("{}", Error::KMSKeyIdMismatch(skr.kid, kid));
-                    return Err(Box::new(Error::KMSKeyIdMismatch(skr.kid, kid)));
+                    return Err(Box::new(Error::KeyIdMismatch(skr.kid, kid)));
                 }
 
                 return Ok(skr.key);
             }
             e => {
-                error!("{}", Error::KMSUnexpected(e));
-                return Err(Box::new(Error::KMSUnexpected(e)));
+                return Err(Box::new(ServerError::KMSUnexpected(e)));
             }
         }
     }
@@ -246,7 +290,7 @@ async fn load_config(maa: &str, kms: &str, kid: u8) -> Res<(KeyConfig, String)> 
 
     let sk = match d {
         Some(key) => <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::PrivateKey::from_bytes(&key),
-        None => Err("Private key missing from SKR response")?,
+        None => Err(Box::new(ServerError::PrivateKeyMissing))?,
     }?;
     let pk = <hpke::kem::DhP384HkdfSha384 as hpke::Kem>::sk_to_pk(&sk);
 
@@ -371,17 +415,19 @@ async fn score(
     let maa_url = args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
     let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
     let (ohttp, token) = match load_config(&maa_url, &kms_url, kid).await {
-        Err(_) => {
+        Err(e) => {
+            error_with_backtrace!(e);
             return Ok(warp::http::Response::builder().status(500).body(Body::from(
                 &b"Failed to get or load OHTTP configuration."[..],
-            )))
+            )));
         }
         Ok((config, token)) => match OhttpServer::new(config) {
             Ok(server) => (server, token),
-            _ => {
+            Err(e) => {
+                error_with_backtrace!(e);
                 return Ok(warp::http::Response::builder().status(500).body(Body::from(
                     &b"Failed to get or load OHTTP configuration."[..],
-                )))
+                )));
             }
         },
     };
@@ -406,7 +452,7 @@ async fn score(
         match generate_reply(&ohttp, inject_headers, &body[..], target, mode).await {
             Ok(s) => s,
             Err(e) => {
-                error!("400 {}", e.to_string());
+                error_with_backtrace!(e);
                 if let Ok(oe) = e.downcast::<::ohttp::Error>() {
                     return Ok(warp::http::Response::builder()
                         .status(422)
@@ -478,13 +524,19 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
                     .status(200)
                     .body(Vec::from(hex).into()))
             }
-            Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
-                &b"Invalid key configuration (check KeyConfig written to initial cache)"[..],
-            ))),
+            Err(e) => {
+                error_with_backtrace!(e);
+                Ok(warp::http::Response::builder().status(500).body(Body::from(
+                    &b"Invalid key configuration (check KeyConfig written to initial cache)"[..],
+                )))
+            }
         },
-        Err(_e) => Ok(warp::http::Response::builder().status(500).body(Body::from(
-            &b"KID 0 missing from cache (should be impossible with local keying)"[..],
-        ))),
+        Err(e) => {
+            error_with_backtrace!(e);
+            Ok(warp::http::Response::builder().status(500).body(Body::from(
+                &b"KID 0 missing from cache (should be impossible with local keying)"[..],
+            )))
+        }
     }
 }
 
@@ -518,7 +570,7 @@ async fn main() -> Res<()> {
             ],
         )
         .map_err(|e| {
-            error!("{e}");
+            error_with_backtrace!(e);
             e
         })?;
         cache.insert(0, (config, String::new())).await;

@@ -51,7 +51,7 @@ format-checks:
 
 run-server-attest:
 	cargo run --bin ohttp-server -- --target ${TARGET} \
-		--maa_url ${MAA} --kms_url ${KMS}
+		--maa-url ${MAA} --kms-url ${KMS}
 
 # Containerized server deployments
 
@@ -61,6 +61,12 @@ run-server-container:
 run-server-container-cvm: 
 	docker run --privileged --net=host \
 	-e TARGET=${TARGET} -e MAA_URL=${MAA} -e KMS_URL=${KMS}/app/key -e INJECT_HEADERS=${INJECT_HEADERS} \
+	--mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security \
+	--device /dev/tpmrm0  ohttp-server
+
+run-server-container-cvm-cluster: 
+	docker run --privileged --net=host \
+	-e TARGET=${TARGET} -e INJECT_HEADERS=${INJECT_HEADERS} \
 	--mount type=bind,source=/sys/kernel/security,target=/sys/kernel/security \
 	--device /dev/tpmrm0  ohttp-server
 
@@ -87,23 +93,23 @@ verify-quote:
 # Local client deployments
 
 run-client-local:
-	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --config `curl -s http://localhost:9443/discover` 
 
 run-client-kms: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem 
 
 run-client-kms-aoai-local: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem \
   -O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
 
 run-client-kms-aoai: service-cert 
-	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
+	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
   --kms-cert ./service_cert.pem \
   -H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \

@@ -3,7 +3,7 @@ use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
 use ohttp::ClientRequest;
 use reqwest::{header::AUTHORIZATION, Client};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::{self, Cursor, Read, Write},
@@ -16,7 +16,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
-const DEFAULT_KMS_URL: &str = "https://acceu-aml-504.confidential-ledger.azure.com";
+const DEFAULT_KMS_URL: &str = "https://accconfinferencedebug.confidential-ledger.azure.com";
 
 #[derive(Debug, Clone)]
 /// This allows a `HexArg` to be created from a string slice (`&str`) by decoding
@@ -35,6 +35,57 @@ impl Deref for HexArg {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+use backtrace::Backtrace;
+
+#[derive(Serialize)]
+struct BacktraceFrame {
+    index: usize,
+    address: String,
+    name: Option<String>,
+    file: Option<String>,
+    line: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct BacktraceJson {
+    frames: Vec<BacktraceFrame>,
+}
+
+fn capture_backtrace() -> BacktraceJson {
+    let bt = Backtrace::new();
+    let frames = bt
+        .frames()
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            let symbols = frame.symbols();
+            BacktraceFrame {
+                index,
+                address: format!("{:p}", frame.ip()),
+                name: symbols
+                    .first()
+                    .and_then(backtrace::BacktraceSymbol::name)
+                    .map(|n| format!("{n:?}")),
+                file: symbols
+                    .first()
+                    .and_then(|s| s.filename())
+                    .map(|f| f.display().to_string()),
+                line: symbols.first().and_then(backtrace::BacktraceSymbol::lineno),
+            }
+        })
+        .collect();
+
+    BacktraceJson { frames }
+}
+
+macro_rules! error_with_backtrace {
+    ($e:expr) => {{
+        let backtrace = capture_backtrace();
+        let json_backtrace = serde_json::to_string_pretty(&backtrace).expect("Failed to serialize backtrace");
+        error!("An error occurred: {} Backtrace:\n{}", $e, json_backtrace);
+    }};
 }
 
 #[derive(Debug, Parser)]
@@ -377,7 +428,6 @@ async fn handle_response(
         match File::create(outfile) {
             Ok(file) => Box::new(file),
             Err(e) => {
-                error!("Error opening output file: {}", e);
                 return Err(Box::new(e));
             }
         }
@@ -433,7 +483,7 @@ async fn main() -> Res<()> {
     ) {
         Ok(result) => result,
         Err(e) => {
-            error!("{e}");
+            error_with_backtrace!(e);
             return Err(e);
         }
     };
@@ -449,7 +499,7 @@ async fn main() -> Res<()> {
     let ohttp_request = match result {
         Ok(request) => request,
         Err(e) => {
-            error!("{e}");
+            error_with_backtrace!(e);
             return Err(e);
         }
     };
@@ -459,7 +509,7 @@ async fn main() -> Res<()> {
     let (enc_request, ohttp_response) = match ohttp_request.encapsulate(&request_buf) {
         Ok(result) => result,
         Err(e) => {
-            error!("{e}");
+            error_with_backtrace!(e);
             return Err(Box::new(e));
         }
     };
@@ -473,7 +523,7 @@ async fn main() -> Res<()> {
         match post_request(&args.url, &args.outer_headers, &args.token, enc_request).await {
             Ok(response) => response,
             Err(e) => {
-                error!("{e}");
+                error_with_backtrace!(e);
                 return Err(e);
             }
         };
@@ -481,7 +531,7 @@ async fn main() -> Res<()> {
 
     // decapsulate and output the http response
     if let Err(e) = handle_response(response, ohttp_response, &args.output).await {
-        error!("{e}");
+        error_with_backtrace!(e);
         return Err(e);
     }
 

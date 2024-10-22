@@ -1,7 +1,8 @@
+pub mod err;
+
+use err::AttestError;
 use libc::{c_char, c_int, size_t};
-use ohttp::Error;
 use std::ffi::CString;
-use tracing::error;
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -30,13 +31,9 @@ pub fn attest(data: &[u8], pcrs: u32, endpoint_url: &str) -> Res<Vec<u8>> {
                 dst.set_len(dstlen);
                 Ok(dst)
             } else {
-                error!("{}", Error::MAAToken(ret));
-                Err(Box::new(Error::MAAToken(ret)))
+                Err(Box::new(AttestError::MAAToken(ret)))
             }
         },
-        _e => {
-            error!("{}", Error::Attest);
-            Err(Box::new(Error::Attest))
-        }
+        _e => Err(Box::new(AttestError::Convertion)),
     }
 }
