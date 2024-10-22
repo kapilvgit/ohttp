@@ -37,7 +37,6 @@ impl Deref for HexArg {
     }
 }
 
-
 use backtrace::Backtrace;
 
 #[derive(Serialize)]
@@ -428,7 +427,7 @@ async fn handle_response(
     let mut output: Box<dyn io::Write> = if let Some(outfile) = output {
         match File::create(outfile) {
             Ok(file) => Box::new(file),
-            Err(e) => {                
+            Err(e) => {
                 return Err(Box::new(e));
             }
         }
