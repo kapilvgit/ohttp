@@ -13,7 +13,6 @@ use std::{
 };
 use tracing::{error, info, trace};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use infer;
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -190,7 +189,7 @@ fn create_multipart_body(fields: &Option<Vec<String>>, boundary: &str) -> Res<Ve
 
                 let kind = infer::get(&file_contents).expect("file type is unknown");
                 let mime_type = kind.mime_type();
-                
+
                 // Add the file
                 write!(
                     &mut body,
