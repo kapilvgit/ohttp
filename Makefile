@@ -124,10 +124,10 @@ run-client-container:
   --config `curl -s http://localhost:9443/discover`
 
 run-client-container-kms: service-cert
-	docker run --privileged --net=host --volume ${INPUT}:${MOUNTED_INPUT} \
+	docker run --volume ${INPUT}:${MOUNTED_INPUT} \
 	--volume ./service_cert.pem:/tmp/service_cert.pem ohttp-client \
 	${SCORING_ENDPOINT} --target-path ${TARGET_PATH} -F "file=@${MOUNTED_INPUT}" \
-  --maa-url=${MAA} --kms-url=${KMS} --kms-cert /tmp/service_cert.pem 
+	--maa-url=${MAA} --kms-url=${KMS} --kms-cert /tmp/service_cert.pem 
 
 run-client-container-it:
 	docker run -it --privileged --net=host -it --entrypoint=/bin/bash ohttp-client
