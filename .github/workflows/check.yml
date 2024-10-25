@@ -105,7 +105,7 @@ jobs:
         run: | 
           ./scripts/service_wait.sh 127.0.0.1:3000
           ./scripts/service_wait.sh 127.0.0.1:9443
-          make run-client-container-local
+          make run-client-container
 
       - name: Stop containers
         run: |
