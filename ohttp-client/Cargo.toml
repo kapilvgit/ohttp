@@ -25,6 +25,7 @@ serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.18", features = ["default", "json", "env-filter"] }
 backtrace = "0.3"
+infer = "0.16.0"
 
 [dependencies.verifier]
 path= "../verifier"
