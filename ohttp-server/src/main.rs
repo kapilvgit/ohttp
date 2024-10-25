@@ -35,7 +35,7 @@ use hpke::Deserializable;
 use serde::{Deserialize, Serialize};
 
 use err::ServerError;
-use tracing::{error, info, info_span, trace, Instrument};
+use tracing::{error, info, trace};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, FmtSubscriber};
 use uuid::Uuid;
 
@@ -393,120 +393,117 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
     result
 }
 
+#[tracing::instrument(skip(headers, body, args))]
 async fn score(
     headers: warp::hyper::HeaderMap,
     body: warp::hyper::body::Bytes,
     args: Arc<Args>,
+    x_ms_request_id: Uuid,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
-    let span = info_span!("x-ms-request-id", guid = %Uuid::new_v4());
-    async move {
-        let target = args.target.clone();
-        info!("Received encapsulated score request for target {}", target);
+    let target = args.target.clone();
+    info!("Received encapsulated score request for target {}", target);
 
-        info!("Request headers length = {}", headers.len());
-        let return_token = headers.contains_key("x-attestation-token");
+    info!("Request headers length = {}", headers.len());
+    let return_token = headers.contains_key("x-attestation-token");
 
-        // The KID is normally the first byte of the request
-        let kid = match body.first().copied() {
-            None => {
-                return Ok(warp::http::Response::builder()
-                    .status(500)
-                    .body(Body::from(&b"No key found in request."[..])))
-            }
-            Some(kid) => kid,
-        };
-        let maa_url = args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
-        let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
-        let (ohttp, token) = match load_config(&maa_url, &kms_url, kid).await {
+    // The KID is normally the first byte of the request
+    let kid = match body.first().copied() {
+        None => {
+            return Ok(warp::http::Response::builder()
+                .status(500)
+                .body(Body::from(&b"No key found in request."[..])))
+        }
+        Some(kid) => kid,
+    };
+    let maa_url = args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
+    let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
+    let (ohttp, token) = match load_config(&maa_url, &kms_url, kid).await {
+        Err(e) => {
+            error_with_backtrace!(e);
+            return Ok(warp::http::Response::builder().status(500).body(Body::from(
+                &b"Failed to get or load OHTTP configuration."[..],
+            )));
+        }
+        Ok((config, token)) => match OhttpServer::new(config) {
+            Ok(server) => (server, token),
             Err(e) => {
                 error_with_backtrace!(e);
                 return Ok(warp::http::Response::builder().status(500).body(Body::from(
                     &b"Failed to get or load OHTTP configuration."[..],
                 )));
             }
-            Ok((config, token)) => match OhttpServer::new(config) {
-                Ok(server) => (server, token),
-                Err(e) => {
-                    error_with_backtrace!(e);
-                    return Ok(warp::http::Response::builder().status(500).body(Body::from(
-                        &b"Failed to get or load OHTTP configuration."[..],
-                    )));
+        },
+    };
+
+    let inject_request_headers = args.inject_request_headers.clone();
+    info!(
+        "Request inject headers length = {}",
+        inject_request_headers.len()
+    );
+    for key in &inject_request_headers {
+        info!("    {}", key);
+    }
+
+    let inject_headers = compute_injected_headers(&headers, inject_request_headers);
+    info!("Injected headers length = {}", inject_headers.len());
+    for (key, value) in &inject_headers {
+        info!("    {}: {}", key, value.to_str().unwrap());
+    }
+
+    let mode = args.mode();
+    let (response, server_response) =
+        match generate_reply(&ohttp, inject_headers, &body[..], target, mode).await {
+            Ok(s) => s,
+            Err(e) => {
+                error_with_backtrace!(e);
+                if let Ok(oe) = e.downcast::<::ohttp::Error>() {
+                    return Ok(warp::http::Response::builder()
+                        .status(422)
+                        .body(Body::from(format!("Error: {oe:?}"))));
                 }
-            },
+
+                return Ok(warp::http::Response::builder()
+                    .status(400)
+                    .body(Body::from(&b"Request error"[..])));
+            }
         };
 
-        let inject_request_headers = args.inject_request_headers.clone();
-        info!(
-            "Request inject headers length = {}",
-            inject_request_headers.len()
+    let mut builder =
+        warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
+
+    // Add HTTP header with MAA token, for client auditing.
+    if return_token {
+        builder = builder.header(
+            HeaderName::from_static("x-attestation-token"),
+            token.clone(),
         );
-        for key in &inject_request_headers {
-            info!("    {}", key);
-        }
-
-        let inject_headers = compute_injected_headers(&headers, inject_request_headers);
-        info!("Injected headers length = {}", inject_headers.len());
-        for (key, value) in &inject_headers {
-            info!("    {}: {}", key, value.to_str().unwrap());
-        }
-
-        let mode = args.mode();
-        let (response, server_response) =
-            match generate_reply(&ohttp, inject_headers, &body[..], target, mode).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error_with_backtrace!(e);
-                    if let Ok(oe) = e.downcast::<::ohttp::Error>() {
-                        return Ok(warp::http::Response::builder()
-                            .status(422)
-                            .body(Body::from(format!("Error: {oe:?}"))));
-                    }
-
-                    return Ok(warp::http::Response::builder()
-                        .status(400)
-                        .body(Body::from(&b"Request error"[..])));
-                }
-            };
-
-        let mut builder =
-            warp::http::Response::builder().header("Content-Type", "message/ohttp-chunked-res");
-
-        // Add HTTP header with MAA token, for client auditing.
-        if return_token {
-            builder = builder.header(
-                HeaderName::from_static("x-attestation-token"),
-                token.clone(),
-            );
-        }
-
-        // Move headers from the inner response into the outer response
-        info!("Response headers:");
-        for (key, value) in response.headers() {
-            if !FILTERED_RESPONSE_HEADERS
-                .iter()
-                .any(|h| h.eq_ignore_ascii_case(key.as_str()))
-            {
-                info!(
-                    "    {}: {}",
-                    key,
-                    std::str::from_utf8(value.as_bytes()).unwrap()
-                );
-                builder = builder.header(key.as_str(), value.as_bytes());
-            }
-        }
-
-        let stream = Box::pin(unfold(response, |mut response| async move {
-            match response.chunk().await {
-                Ok(Some(chunk)) => Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response)),
-                _ => None,
-            }
-        }));
-
-        let stream = server_response.encapsulate_stream(stream);
-        Ok(builder.body(Body::wrap_stream(stream)))
     }
-    .instrument(span)
-    .await
+
+    // Move headers from the inner response into the outer response
+    info!("Response headers:");
+    for (key, value) in response.headers() {
+        if !FILTERED_RESPONSE_HEADERS
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(key.as_str()))
+        {
+            info!(
+                "    {}: {}",
+                key,
+                std::str::from_utf8(value.as_bytes()).unwrap()
+            );
+            builder = builder.header(key.as_str(), value.as_bytes());
+        }
+    }
+
+    let stream = Box::pin(unfold(response, |mut response| async move {
+        match response.chunk().await {
+            Ok(Some(chunk)) => Some((Ok::<Vec<u8>, ohttp::Error>(chunk.to_vec()), response)),
+            _ => None,
+        }
+    }));
+
+    let stream = server_response.encapsulate_stream(stream);
+    Ok(builder.body(Body::wrap_stream(stream)))
 }
 
 async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Infallible> {
@@ -592,6 +589,7 @@ async fn main() -> Res<()> {
         .and(warp::header::headers_cloned())
         .and(warp::body::bytes())
         .and(warp::any().map(move || Arc::clone(&args1)))
+        .and(warp::any().map(Uuid::new_v4))
         .and_then(score);
 
     let args2 = Arc::clone(&argsc);
