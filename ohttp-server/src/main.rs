@@ -36,7 +36,8 @@ use serde::{Deserialize, Serialize};
 
 use err::ServerError;
 use tracing::{error, info, trace};
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, FmtSubscriber};
+use uuid::Uuid;
 
 use backtrace::Backtrace;
 
@@ -392,10 +393,12 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
     result
 }
 
+#[tracing::instrument(skip(headers, body, args))]
 async fn score(
     headers: warp::hyper::HeaderMap,
     body: warp::hyper::body::Bytes,
     args: Arc<Args>,
+    x_ms_request_id: Uuid,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     let target = args.target.clone();
     info!("Received encapsulated score request for target {}", target);
@@ -547,6 +550,8 @@ async fn main() -> Res<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .with_file(true)
         .with_line_number(true)
+        .with_thread_ids(true)
+        .with_span_events(FmtSpan::FULL)
         .json()
         .finish();
 
@@ -584,6 +589,7 @@ async fn main() -> Res<()> {
         .and(warp::header::headers_cloned())
         .and(warp::body::bytes())
         .and(warp::any().map(move || Arc::clone(&args1)))
+        .and(warp::any().map(Uuid::new_v4))
         .and_then(score);
 
     let args2 = Arc::clone(&argsc);
