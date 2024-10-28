@@ -187,10 +187,13 @@ fn create_multipart_body(fields: &Option<Vec<String>>, boundary: &str) -> Res<Ve
                 let mut file_contents = Vec::new();
                 file.read_to_end(&mut file_contents)?;
 
+                let kind = infer::get(&file_contents).expect("file type is unknown");
+                let mime_type = kind.mime_type();
+
                 // Add the file
                 write!(
                     &mut body,
-                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: audio/mp3\r\n\r\n"
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n"
                 )?;
                 body.extend_from_slice(&file_contents);
             } else {
