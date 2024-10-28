@@ -12,8 +12,7 @@ RUN cargo install --path ohttp-client --debug
 
 FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y ca-certificates openssl curl jq && rm -rf /var/lib/apt/lists/*
-COPY ./ohttp-server/ca.sh /usr/local/bin
-COPY ./examples ./examples
 COPY --from=builder /usr/local/cargo/bin/ohttp-client /usr/local/bin/ohttp-client
-COPY --chmod=755 ./docker/client/run.sh .
-CMD ["./run.sh"]
+ENV RUST_BACKTRACE=1
+ENV RUST_LOG=info
+ENTRYPOINT [ "/usr/local/bin/ohttp-client" ]

@@ -20,28 +20,29 @@ else
 	echo "Unknown model"
 endif
 	
-export INPUT ?= ./examples/audio.mp3
+export INPUT ?= ${PWD}/examples/audio.mp3
+export MOUNTED_INPUT ?= /examples/audio.mp3
 export INJECT_HEADERS ?= openai-internal-enableasrsupport
 export DETACHED ?= -d
 
 # Build commands
 
-build-server-local:
+build-server:
 	cargo build --bin ohttp-server
 
-build-client-local:
+build-client:
 	cargo build --bin ohttp-client
 
-build-whisper:
+build-whisper-container:
 	docker build -f docker/whisper/Dockerfile -t whisper-api ./docker/whisper
 
-build-server:
+build-server-container:
 	docker build -f docker/server/Dockerfile -t ohttp-server .
 
-build-client:
+build-client-container:
 	docker build -f docker/client/Dockerfile -t ohttp-client .
 
-build: build-server build-client build-whisper
+build: build-server-container build-client-container build-whisper-container
 
 format-checks:
 	cargo fmt --all -- --check --config imports_granularity=Crate
@@ -49,7 +50,7 @@ format-checks:
 
 # Local server deployments
 
-run-server-attest:
+run-server-kms:
 	cargo run --bin ohttp-server -- --target ${TARGET} \
 		--maa-url ${MAA} --kms-url ${KMS}
 
@@ -92,7 +93,7 @@ verify-quote:
 
 # Local client deployments
 
-run-client-local:
+run-client:
 	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --config `curl -s http://localhost:9443/discover` 
@@ -102,31 +103,31 @@ run-client-kms: service-cert
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-cert ./service_cert.pem 
 
-run-client-kms-aoai-local: service-cert 
-	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
-  --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  --kms-cert ./service_cert.pem \
-  -O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
-
 run-client-kms-aoai: service-cert 
+	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	--target-path ${TARGET_PATH} -F "file=@${INPUT}" \
+	--kms-cert ./service_cert.pem \
+	-O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
+
+run-client-kms-aoai-token: service-cert 
 	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
-  --target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
-  --kms-cert ./service_cert.pem \
-  -H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
-	-O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
+	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
+	--kms-cert ./service_cert.pem \
+	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
+	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}'
 
 # Containerized client deployments
 
-run-client-container-local:
-	docker run --privileged --net=host -e SCORING_ENDPOINT=${SCORING_ENDPOINT} \
-	-e TARGET_PATH=${TARGET_PATH} -e INPUT=${INPUT} ohttp-client
-
 run-client-container:
-	docker run --privileged --net=host -e SCORING_ENDPOINT=${SCORING_ENDPOINT} \
-	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
-	-e INPUT=${INPUT} ohttp-client
+	docker run --privileged --net=host --volume ${INPUT}:${MOUNTED_INPUT} ohttp-client \
+	$(SCORING_ENDPOINT) --target-path ${TARGET_PATH} -F "file=@${MOUNTED_INPUT}" \
+	--config `curl -s http://localhost:9443/discover`
+
+run-client-container-kms: service-cert
+	docker run --volume ${INPUT}:${MOUNTED_INPUT} \
+	--volume ./service_cert.pem:/tmp/service_cert.pem ohttp-client \
+	${SCORING_ENDPOINT} --target-path ${TARGET_PATH} -F "file=@${MOUNTED_INPUT}" \
+	--maa-url=${MAA} --kms-url=${KMS} --kms-cert /tmp/service_cert.pem 
 
 run-client-container-it:
-	docker run -it --privileged --net=host -e SCORING_ENDPOINT=${SCORING_ENDPOINT} \
-	-e TARGET_PATH=${TARGET_PATH} -e KMS_URL=${KMS} \
-	-e INPUT=${INPUT} ohttp-client bash
+	docker run -it --privileged --net=host -it --entrypoint=/bin/bash ohttp-client

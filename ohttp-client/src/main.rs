@@ -2,7 +2,7 @@ use bhttp::{Message, Mode};
 use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
 use ohttp::ClientRequest;
-use reqwest::{header::AUTHORIZATION, Client};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -136,10 +136,6 @@ struct Args {
     /// List of headers in the outer request
     #[arg(long, short = 'O')]
     outer_headers: Option<Vec<String>>,
-
-    /// Token for the outer request
-    #[arg(long, short = 'T')]
-    token: Option<String>,
 }
 
 /// Writes the request line for an HTTP POST request to the provided buffer.
@@ -383,17 +379,13 @@ async fn create_request_from_kms_config(
 async fn post_request(
     url: &String,
     outer_headers: &Option<Vec<String>>,
-    token: &Option<String>,
     enc_request: Vec<u8>,
 ) -> Res<reqwest::Response> {
     let client = reqwest::ClientBuilder::new().build()?;
 
-    let tokenstr = token.as_ref().map_or("None", |s| s.as_str());
-
     let mut builder = client
         .post(url)
-        .header("content-type", "message/ohttp-chunked-req")
-        .header(AUTHORIZATION, format!("Bearer {tokenstr}"));
+        .header("content-type", "message/ohttp-chunked-req");
 
     // Add outer headers
     trace!("Outer request headers:");
@@ -522,14 +514,13 @@ async fn main() -> Res<()> {
     );
 
     // Post the encapsulated ohttp request buffer to args.url
-    let response =
-        match post_request(&args.url, &args.outer_headers, &args.token, enc_request).await {
-            Ok(response) => response,
-            Err(e) => {
-                error_with_backtrace!(e);
-                return Err(e);
-            }
-        };
+    let response = match post_request(&args.url, &args.outer_headers, enc_request).await {
+        Ok(response) => response,
+        Err(e) => {
+            error_with_backtrace!(e);
+            return Err(e);
+        }
+    };
     trace!("Posted the OHTTP request to {}", args.url);
 
     // decapsulate and output the http response
