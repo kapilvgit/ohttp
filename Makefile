@@ -109,12 +109,12 @@ run-client-kms-aoai: service-cert
 	--kms-cert ./service_cert.pem \
 	-O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
 
-run-client-kms-aoai: service-cert 
+run-client-kms-aoai-token: service-cert 
 	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
 	--kms-cert ./service_cert.pem \
 	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
-	-O 'azureml-model-deployment:$(DEPLOYMENT)' -T ${TOKEN}
+	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}
 
 # Containerized client deployments
 
