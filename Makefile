@@ -114,7 +114,7 @@ run-client-kms-aoai-token: service-cert
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
 	--kms-cert ./service_cert.pem \
 	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
-	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}
+	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}'
 
 # Containerized client deployments
 
