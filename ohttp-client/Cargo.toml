@@ -31,10 +31,12 @@ infer = "0.16.0"
 path= "../verifier"
 
 [dependencies.bhttp]
-path= "../bhttp"
+git = "https://github.com/kapilvgit/ohttp.git"
+branch = "kapilv/upstream"
 features = ["bhttp", "http"]
 
 [dependencies.ohttp]
-path= "../ohttp"
+git = "https://github.com/kapilvgit/ohttp.git"
+branch = "kapilv/upstream"
 features = ["client"]
 default-features = false
