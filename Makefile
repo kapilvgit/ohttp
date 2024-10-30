@@ -13,7 +13,7 @@ else ifeq ($(MODEL), whisper_aoai_local)
 	SCORING_ENDPOINT ?= 'http://localhost:9443/score'
 else ifeq ($(MODEL), whisper_aoai)
 	TARGET ?= http://127.0.0.1:5002
-	TARGET_PATH ?= '/v1/engines/whisper/audio/transcriptions'
+	TARGET_PATH ?= '/v1/engines/whisper/audio/translations'
 	DEPLOYMENT ?= 'arthig-deploy20'
 	SCORING_ENDPOINT ?= 'https://arthig-ep.eastus2.inference.ml.azure.com/score'
 else
@@ -116,15 +116,20 @@ run-client-kms-aoai-token: service-cert
 	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
 	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}'
 
+run-client-kms-aoai-apim-token: service-cert
+	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- ${APIM_ENDPOINT} \
+	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" \
+	--kms-url ${KMS} --kms-cert ./service_cert.pem -O 'api-key: ${API_KEY}'
+
 # Containerized client deployments
 
 run-client-container:
-	docker run --net=host --volume ${INPUT}:${MOUNTED_INPUT} -e TARGET_PATH=${TARGET_PATH} \
-	ohttp-client $(SCORING_ENDPOINT) -F "file=@${MOUNTED_INPUT}"
+	docker run --net=host --volume ${INPUT}:${MOUNTED_INPUT} \
+	ohttp-client $(SCORING_ENDPOINT) -F "file=@${MOUNTED_INPUT}" --target-path ${TARGET_PATH}
 
-run-client-container-kms: service-cert
-	docker run --volume ${INPUT}:${MOUNTED_INPUT} -e TARGET_PATH=${TARGET_PATH} \
-	ohttp-client ${SCORING_ENDPOINT} -F "file=@${MOUNTED_INPUT}" --kms-url=${KMS}
+run-client-container-kms:
+	docker run --net=host --volume ${INPUT}:${MOUNTED_INPUT} -e KMS_URL=${KMS} \
+	ohttp-client ${SCORING_ENDPOINT} -F "file=@${MOUNTED_INPUT}" --target-path ${TARGET_PATH}
 
 run-client-container-it:
 	docker run -it --privileged --net=host -it --entrypoint=/bin/bash ohttp-client

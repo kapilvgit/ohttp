@@ -1,5 +1,6 @@
 # Attested OHTTP Client
-This repository 
+This repository contains a reference implementation of an attested OHTTP client for 
+Azure AI confidential inferencing.
 
 ## Prerequisites 
 
@@ -7,21 +8,32 @@ This repository
 2. Docker 
 
 ## Using pre-built image
-You can use pre-built attested OHTTP container images to run an inferencing request. 
+You can use pre-built attested OHTTP container images to send an inferencing request. 
 
-To run inferencing using a pre-packaged audio file, 
+Set the inferencing endpoint and accessk key as follows.
+```
+export TARGET_URI=<URL for your endpoint>
+export TARGET_PATH=/v1/engines/whisper/audio/translations
+export KEY=<key for accessing the endpoint>
+```
+
+Run inferencing using a pre-packaged audio file. 
 ```
 export KMS_URL=https://accconfinferencedebug.confidential-ledger.azure.com
-docker run mcr.microsoft.com/attested-ohttp-client:latest \
-  ${SCORING_ENDPOINT} -F "file=/examples/audio.mp3" --kms-url=${KMS_URL}
+docker run -e KMS_URL=${KMS_URL} mcr.microsoft.com/attested-ohttp-client:latest \
+  ${TARGET_URI} --target-path ${TARGET_PATH} -F "file=@/examples/audio.mp3" \
+  -O "api-key: ${KEY}" -F "response_format=json"
 ```
-To run inferencing using your own audio file, 
+
+Run inferencing using your own audio file by mounting the file into the container.
 ```
 export KMS_URL=https://accconfinferencedebug.confidential-ledger.azure.com
-export INPUT=<path to your input file>
-export MOUNTED_INPUT=/examples/sample.mp3
-docker run mcr.microsoft.com/attested-ohttp-client:latest --volume ${INPUT}:${MOUNTED_INPUT}\
-  ${SCORING_ENDPOINT} -F "file=${MOUNTED_INPUT}" --kms-url=${KMS_URL}
+export INPUT_PATH=<path to your input file>
+export MOUNTED_PATH=/examples/audio.mp3
+docker run -e KMS_URL=${KMS_URL} --volume ${INPUT_PATH}:${MOUNTED_PATH} \
+  mcr.microsoft.com/attested-ohttp-client:latest \
+  ${TARGET_URI} --target-path ${TARGET_PATH} -F "file=@${MOUNTED_INPUT}" \
+  -O "api-key ${KEY}" -F "response_format=json"
 ```
 
 ## Building your own container image

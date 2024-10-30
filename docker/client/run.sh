@@ -13,11 +13,6 @@ is_valid_url() {
     fi
 }
 
-if [[ -z ${TARGET_PATH} ]]; then
-  echo "No TARGET_PATH defined"
-  exit 1
-fi
-
 if [[ -n ${KMS_URL} ]]; then 
   if is_valid_url $KMS_URL; then 
     # Obtain KMS service certificate
@@ -31,6 +26,5 @@ else
   ARGS="$ARGS --config `curl -s http://localhost:9443/discover`"
 fi
 
-/usr/local/bin/ohttp-client ${@} \
-	-F "response_format=json" -F "language=en" --target-path ${TARGET_PATH} \
-	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' ${ARGS}
+echo "Running /usr/local/bin/ohttp-client" "$@" ${ARGS}
+RUST_LOG=info /usr/local/bin/ohttp-client "$@" ${ARGS}

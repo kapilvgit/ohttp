@@ -18,5 +18,4 @@ COPY ./examples/15m_gpt-has-entered-the-chat.mp3 ./examples/15m_gpt-has-entered-
 COPY --chmod=755 ./docker/client/run.sh .
 ENV RUST_BACKTRACE=1
 ENV RUST_LOG=info
-ENV TARGET_PATH=/v1/engines/whisper/audio/transcriptions
 ENTRYPOINT [ "./run.sh" ]
