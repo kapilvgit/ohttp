@@ -101,33 +101,30 @@ run-client:
 run-client-kms: service-cert 
 	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-  --kms-cert ./service_cert.pem 
+  --kms-url ${KMS} --kms-cert ./service_cert.pem 
 
 run-client-kms-aoai: service-cert 
 	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" \
-	--kms-cert ./service_cert.pem \
+	--kms-url ${KMS} --kms-cert ./service_cert.pem \
 	-O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
 
 run-client-kms-aoai-token: service-cert 
 	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
-	--kms-cert ./service_cert.pem \
+	--kms-url ${KMS} --kms-cert ./service_cert.pem \
 	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
 	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}'
 
 # Containerized client deployments
 
 run-client-container:
-	docker run --privileged --net=host --volume ${INPUT}:${MOUNTED_INPUT} ohttp-client \
-	$(SCORING_ENDPOINT) --target-path ${TARGET_PATH} -F "file=@${MOUNTED_INPUT}" \
-	--config `curl -s http://localhost:9443/discover`
+	docker run --net=host --volume ${INPUT}:${MOUNTED_INPUT} -e TARGET_PATH=${TARGET_PATH} \
+	ohttp-client $(SCORING_ENDPOINT) -F "file=@${MOUNTED_INPUT}"
 
 run-client-container-kms: service-cert
-	docker run --volume ${INPUT}:${MOUNTED_INPUT} \
-	--volume ./service_cert.pem:/tmp/service_cert.pem ohttp-client \
-	${SCORING_ENDPOINT} --target-path ${TARGET_PATH} -F "file=@${MOUNTED_INPUT}" \
-	--maa-url=${MAA} --kms-url=${KMS} --kms-cert /tmp/service_cert.pem 
+	docker run --volume ${INPUT}:${MOUNTED_INPUT} -e TARGET_PATH=${TARGET_PATH} \
+	ohttp-client ${SCORING_ENDPOINT} -F "file=@${MOUNTED_INPUT}" --kms-url=${KMS}
 
 run-client-container-it:
 	docker run -it --privileged --net=host -it --entrypoint=/bin/bash ohttp-client
