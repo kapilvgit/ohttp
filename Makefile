@@ -133,3 +133,8 @@ run-client-container-kms:
 
 run-client-container-it:
 	docker run -it --privileged --net=host -it --entrypoint=/bin/bash ohttp-client
+
+run-client-container-aoai:
+	docker run --volume ${INPUT}:${MOUNTED_INPUT} -e KMS_URL=${KMS} \
+	ohttp-client ${SCORING_ENDPOINT} -F "file=@${MOUNTED_INPUT}" --target-path ${TARGET_PATH} \
+	-O "api-key: ${API_KEY}" -F "response_format=json"
