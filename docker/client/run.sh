@@ -13,35 +13,18 @@ is_valid_url() {
     fi
 }
 
-if [[ -z ${SCORING_ENDPOINT} ]]; then
-  echo "No SCORING_ENDPOINT defined"
-  exit 1
-fi
-
-if [[ -z ${TARGET_PATH} ]]; then
-  echo "No TARGET_PATH defined"
-  exit 1
-fi
-
-if [[ -z ${INPUT} ]]; then
-  echo "No INPUT defined"
-  exit 1
-fi
-
-CMD="RUST_BACKTRACE=1 RUST_LOG=info /usr/local/bin/ohttp-client ${SCORING_ENDPOINT} --target-path ${TARGET_PATH} -F \"file=@${INPUT}\""
-
 if [[ -n ${KMS_URL} ]]; then 
   if is_valid_url $KMS_URL; then 
     # Obtain KMS service certificate
     curl -s -k ${KMS_URL}/node/network | jq -r .service_certificate > /tmp/service_cert.pem
-    CMD="$CMD --kms-url ${KMS_URL} --kms-cert /tmp/service_cert.pem"
+    ARGS="$ARGS --kms-url ${KMS_URL} --kms-cert /tmp/service_cert.pem"
   else 
     echo "Invalid KMS URL"
     exit 1
   fi
 else 
-  CMD="$CMD --config `curl -s http://localhost:9443/discover`"
+  ARGS="$ARGS --config `curl -s http://localhost:9443/discover`"
 fi
 
-echo "Running $CMD..."
-eval $CMD
+echo "Running /usr/local/bin/ohttp-client" "$@" ${ARGS}
+RUST_LOG=info /usr/local/bin/ohttp-client "$@" ${ARGS}

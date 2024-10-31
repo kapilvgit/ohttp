@@ -16,8 +16,6 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
-const DEFAULT_KMS_URL: &str = "https://accconfinferencedebug.confidential-ledger.azure.com";
-
 #[derive(Debug, Clone)]
 /// This allows a `HexArg` to be created from a string slice (`&str`) by decoding
 /// the string as hexadecimal.
@@ -104,7 +102,7 @@ struct Args {
     #[arg(long, short = 'c')]
     config: Option<HexArg>,
 
-    /// json containing the key configuration along with proof
+    /// URL of the KMS to obtain HPKE keys from
     #[arg(long, short = 'f')]
     kms_url: Option<String>,
 
@@ -365,14 +363,11 @@ fn create_request_from_encoded_config_list(config: &Option<HexArg>) -> Res<ohttp
 /// Creates an OHTTP client from KMS.
 ///
 async fn create_request_from_kms_config(
+    kms_url: &String,
     kms_cert: &PathBuf,
-    kms_url: &Option<String>,
 ) -> Res<ohttp::ClientRequest> {
     let cert = fs::read_to_string(kms_cert)?;
-    let url = kms_url
-        .clone()
-        .unwrap_or_else(|| DEFAULT_KMS_URL.to_string());
-    let config = get_kms_config(url.to_string(), &cert).await?;
+    let config = get_kms_config(kms_url.to_owned(), &cert).await?;
     ClientRequest::from_kms_config(&config, &cert)
 }
 
@@ -486,8 +481,8 @@ async fn main() -> Res<()> {
     trace!("Created the ohttp request buffer");
 
     //  create the OHTTP request using the KMS or the static config file
-    let result = if let Some(kms_cert) = &args.kms_cert {
-        create_request_from_kms_config(kms_cert, &args.kms_url).await
+    let result = if let (Some(kms_url), Some(kms_cert)) = (&args.kms_url, &args.kms_cert) {
+        create_request_from_kms_config(kms_url, kms_cert).await
     } else {
         create_request_from_encoded_config_list(&args.config)
     };
