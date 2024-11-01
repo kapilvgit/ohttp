@@ -95,7 +95,7 @@ struct Args {
     url: String,
 
     /// Target path of the oblivious resource
-    #[arg(long, short = 'p')]
+    #[arg(long, short = 'p', default_value = "/")]
     target_path: String,
 
     /// key configuration
