@@ -336,6 +336,7 @@ async fn generate_reply(
     inject_headers: HeaderMap,
     enc_request: &[u8],
     target: Url,
+    target_path: Option<&HeaderValue>,
     _mode: Mode,
 ) -> Res<(Response, ServerResponse)> {
     let (request, server_response) = ohttp.decapsulate(enc_request)?;
@@ -362,7 +363,14 @@ async fn generate_reply(
     };
 
     let mut t = target;
-    if let Some(path_bytes) = bin_request.control().path() {
+
+    // Set resource path to either the one provided in the outer request header
+    // If none provided, use the path set by the client
+    if let Some(path_bytes) = target_path {
+        if let Ok(path_str) = std::str::from_utf8(path_bytes.as_bytes()) {
+            t.set_path(path_str);
+        }
+    } else if let Some(path_bytes) = bin_request.control().path() {
         if let Ok(path_str) = std::str::from_utf8(path_bytes) {
             t.set_path(path_str);
         }
@@ -450,9 +458,10 @@ async fn score(
         info!("    {}: {}", key, value.to_str().unwrap());
     }
 
+    let target_path = headers.get("enginetarget");
     let mode = args.mode();
     let (response, server_response) =
-        match generate_reply(&ohttp, inject_headers, &body[..], target, mode).await {
+        match generate_reply(&ohttp, inject_headers, &body[..], target, target_path, mode).await {
             Ok(s) => s,
             Err(e) => {
                 error_with_backtrace!(e);
