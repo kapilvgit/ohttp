@@ -32,63 +32,14 @@ use serde_cbor::Value;
 use serde_json::from_str;
 
 use hpke::Deserializable;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use err::ServerError;
-use tracing::{error, info, trace};
+use tracing::{error, info, instrument, trace};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, FmtSubscriber};
 use uuid::Uuid;
 
-use backtrace::Backtrace;
-
-#[derive(Serialize)]
-struct BacktraceFrame {
-    index: usize,
-    address: String,
-    name: Option<String>,
-    file: Option<String>,
-    line: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct BacktraceJson {
-    frames: Vec<BacktraceFrame>,
-}
-
-fn capture_backtrace() -> BacktraceJson {
-    let bt = Backtrace::new();
-    let frames = bt
-        .frames()
-        .iter()
-        .enumerate()
-        .map(|(index, frame)| {
-            let symbols = frame.symbols();
-            BacktraceFrame {
-                index,
-                address: format!("{:p}", frame.ip()),
-                name: symbols
-                    .first()
-                    .and_then(backtrace::BacktraceSymbol::name)
-                    .map(|n| format!("{n:?}")),
-                file: symbols
-                    .first()
-                    .and_then(|s| s.filename())
-                    .map(|f| f.display().to_string()),
-                line: symbols.first().and_then(backtrace::BacktraceSymbol::lineno),
-            }
-        })
-        .collect();
-
-    BacktraceJson { frames }
-}
-
-macro_rules! error_with_backtrace {
-    ($e:expr) => {{
-        let backtrace = capture_backtrace();
-        let json_backtrace = serde_json::to_string_pretty(&backtrace).expect("Failed to serialize backtrace");
-        error!("An error occurred: {} Backtrace:\n{}", $e, json_backtrace);
-    }};
-}
+const VERSION: &str = "1.0.0";
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -336,6 +287,7 @@ async fn generate_reply(
     inject_headers: HeaderMap,
     enc_request: &[u8],
     target: Url,
+    target_path: Option<&HeaderValue>,
     _mode: Mode,
 ) -> Res<(Response, ServerResponse)> {
     let (request, server_response) = ohttp.decapsulate(enc_request)?;
@@ -362,7 +314,14 @@ async fn generate_reply(
     };
 
     let mut t = target;
-    if let Some(path_bytes) = bin_request.control().path() {
+
+    // Set resource path to either the one provided in the outer request header
+    // If none provided, use the path set by the client
+    if let Some(path_bytes) = target_path {
+        if let Ok(path_str) = std::str::from_utf8(path_bytes.as_bytes()) {
+            t.set_path(path_str);
+        }
+    } else if let Some(path_bytes) = bin_request.control().path() {
         if let Ok(path_str) = std::str::from_utf8(path_bytes) {
             t.set_path(path_str);
         }
@@ -393,7 +352,7 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
     result
 }
 
-#[tracing::instrument(skip(headers, body, args))]
+#[instrument(skip(headers, body, args), fields(version = %VERSION))]
 async fn score(
     headers: warp::hyper::HeaderMap,
     body: warp::hyper::body::Bytes,
@@ -409,9 +368,11 @@ async fn score(
     // The KID is normally the first byte of the request
     let kid = match body.first().copied() {
         None => {
+            let error_msg = "No key found in request.";
+            error!("{error_msg}");
             return Ok(warp::http::Response::builder()
                 .status(500)
-                .body(Body::from(&b"No key found in request."[..])))
+                .body(Body::from(error_msg.as_bytes())));
         }
         Some(kid) => kid,
     };
@@ -419,18 +380,20 @@ async fn score(
     let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
     let (ohttp, token) = match load_config(&maa_url, &kms_url, kid).await {
         Err(e) => {
-            error_with_backtrace!(e);
-            return Ok(warp::http::Response::builder().status(500).body(Body::from(
-                &b"Failed to get or load OHTTP configuration."[..],
-            )));
+            let error_msg = "Failed to get or load OHTTP configuration.";
+            error!("{error_msg} {e}");
+            return Ok(warp::http::Response::builder()
+                .status(500)
+                .body(Body::from(error_msg.as_bytes())));
         }
         Ok((config, token)) => match OhttpServer::new(config) {
             Ok(server) => (server, token),
             Err(e) => {
-                error_with_backtrace!(e);
-                return Ok(warp::http::Response::builder().status(500).body(Body::from(
-                    &b"Failed to get or load OHTTP configuration."[..],
-                )));
+                let error_msg = "Failed to create OHTTP server from config.";
+                error!("{error_msg} {e}");
+                return Ok(warp::http::Response::builder()
+                    .status(500)
+                    .body(Body::from(error_msg.as_bytes())));
             }
         },
     };
@@ -450,21 +413,25 @@ async fn score(
         info!("    {}: {}", key, value.to_str().unwrap());
     }
 
+    let target_path = headers.get("enginetarget");
     let mode = args.mode();
     let (response, server_response) =
-        match generate_reply(&ohttp, inject_headers, &body[..], target, mode).await {
+        match generate_reply(&ohttp, inject_headers, &body[..], target, target_path, mode).await {
             Ok(s) => s,
             Err(e) => {
-                error_with_backtrace!(e);
+                error!(e);
+
                 if let Ok(oe) = e.downcast::<::ohttp::Error>() {
                     return Ok(warp::http::Response::builder()
                         .status(422)
                         .body(Body::from(format!("Error: {oe:?}"))));
                 }
 
+                let error_msg = "Request error.";
+                error!("{error_msg}");
                 return Ok(warp::http::Response::builder()
                     .status(400)
-                    .body(Body::from(&b"Request error"[..])));
+                    .body(Body::from(error_msg.as_bytes())));
             }
         };
 
@@ -528,14 +495,14 @@ async fn discover(args: Arc<Args>) -> Result<impl warp::Reply, std::convert::Inf
                     .body(Vec::from(hex).into()))
             }
             Err(e) => {
-                error_with_backtrace!(e);
+                error!("{e}");
                 Ok(warp::http::Response::builder().status(500).body(Body::from(
                     &b"Invalid key configuration (check KeyConfig written to initial cache)"[..],
                 )))
             }
         },
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             Ok(warp::http::Response::builder().status(500).body(Body::from(
                 &b"KID 0 missing from cache (should be impossible with local keying)"[..],
             )))
@@ -551,13 +518,12 @@ async fn main() -> Res<()> {
         .with_file(true)
         .with_line_number(true)
         .with_thread_ids(true)
-        .with_span_events(FmtSpan::FULL)
+        .with_span_events(FmtSpan::NEW)
         .json()
         .finish();
 
     // Set the subscriber as global default
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
     ::ohttp::init();
 
     let args = Args::parse();
@@ -575,7 +541,7 @@ async fn main() -> Res<()> {
             ],
         )
         .map_err(|e| {
-            error_with_backtrace!(e);
+            error!("{e}");
             e
         })?;
         cache.insert(0, (config, String::new())).await;

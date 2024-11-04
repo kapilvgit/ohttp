@@ -3,7 +3,7 @@ use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
 use ohttp::ClientRequest;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     fs::{self, File},
     io::{self, Cursor, Read, Write},
@@ -15,8 +15,6 @@ use tracing::{error, info, trace};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
-
-const DEFAULT_KMS_URL: &str = "https://accconfinferencedebug.confidential-ledger.azure.com";
 
 #[derive(Debug, Clone)]
 /// This allows a `HexArg` to be created from a string slice (`&str`) by decoding
@@ -37,57 +35,6 @@ impl Deref for HexArg {
     }
 }
 
-use backtrace::Backtrace;
-
-#[derive(Serialize)]
-struct BacktraceFrame {
-    index: usize,
-    address: String,
-    name: Option<String>,
-    file: Option<String>,
-    line: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct BacktraceJson {
-    frames: Vec<BacktraceFrame>,
-}
-
-fn capture_backtrace() -> BacktraceJson {
-    let bt = Backtrace::new();
-    let frames = bt
-        .frames()
-        .iter()
-        .enumerate()
-        .map(|(index, frame)| {
-            let symbols = frame.symbols();
-            BacktraceFrame {
-                index,
-                address: format!("{:p}", frame.ip()),
-                name: symbols
-                    .first()
-                    .and_then(backtrace::BacktraceSymbol::name)
-                    .map(|n| format!("{n:?}")),
-                file: symbols
-                    .first()
-                    .and_then(|s| s.filename())
-                    .map(|f| f.display().to_string()),
-                line: symbols.first().and_then(backtrace::BacktraceSymbol::lineno),
-            }
-        })
-        .collect();
-
-    BacktraceJson { frames }
-}
-
-macro_rules! error_with_backtrace {
-    ($e:expr) => {{
-        let backtrace = capture_backtrace();
-        let json_backtrace = serde_json::to_string_pretty(&backtrace).expect("Failed to serialize backtrace");
-        error!("An error occurred: {} Backtrace:\n{}", $e, json_backtrace);
-    }};
-}
-
 #[derive(Debug, Parser)]
 #[command(version = "0.1", about = "Make an oblivious HTTP request.")]
 struct Args {
@@ -97,14 +44,14 @@ struct Args {
     url: String,
 
     /// Target path of the oblivious resource
-    #[arg(long, short = 'p')]
+    #[arg(long, short = 'p', default_value = "/")]
     target_path: String,
 
     /// key configuration
     #[arg(long, short = 'c')]
     config: Option<HexArg>,
 
-    /// json containing the key configuration along with proof
+    /// URL of the KMS to obtain HPKE keys from
     #[arg(long, short = 'f')]
     kms_url: Option<String>,
 
@@ -365,14 +312,11 @@ fn create_request_from_encoded_config_list(config: &Option<HexArg>) -> Res<ohttp
 /// Creates an OHTTP client from KMS.
 ///
 async fn create_request_from_kms_config(
+    kms_url: &String,
     kms_cert: &PathBuf,
-    kms_url: &Option<String>,
 ) -> Res<ohttp::ClientRequest> {
     let cert = fs::read_to_string(kms_cert)?;
-    let url = kms_url
-        .clone()
-        .unwrap_or_else(|| DEFAULT_KMS_URL.to_string());
-    let config = get_kms_config(url.to_string(), &cert).await?;
+    let config = get_kms_config(kms_url.to_owned(), &cert).await?;
     ClientRequest::from_kms_config(&config, &cert)
 }
 
@@ -398,18 +342,34 @@ async fn post_request(
         }
     }
 
-    let response = builder.body(enc_request).send().await?.error_for_status()?;
-    trace!("response status: {}\n", response.status());
-    trace!("Response headers:");
-    for (key, value) in response.headers() {
-        trace!(
-            "{}: {}",
-            key,
-            std::str::from_utf8(value.as_bytes()).unwrap()
-        );
+    match builder.body(enc_request).send().await {
+        Ok(response) => {
+            if response.status().is_success() {
+                trace!("response status: {}\n", response.status());
+                trace!("Response headers:");
+                for (key, value) in response.headers() {
+                    trace!(
+                        "{}: {}",
+                        key,
+                        std::str::from_utf8(value.as_bytes()).unwrap()
+                    );
+                }
+                Ok(response)
+            } else {
+                let error_msg = format!(
+                    "HTTP request failed with status {} and message: {}",
+                    response.status(),
+                    response.text().await?
+                );
+                error!(error_msg);
+                Err(error_msg.into())
+            }
+        }
+        Err(e) => {
+            error!("Request failed: {}", e);
+            Err(Box::new(e))
+        }
     }
-
-    Ok(response)
 }
 
 /// Decapsulate the http response
@@ -478,7 +438,7 @@ async fn main() -> Res<()> {
     ) {
         Ok(result) => result,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             return Err(e);
         }
     };
@@ -486,15 +446,15 @@ async fn main() -> Res<()> {
     trace!("Created the ohttp request buffer");
 
     //  create the OHTTP request using the KMS or the static config file
-    let result = if let Some(kms_cert) = &args.kms_cert {
-        create_request_from_kms_config(kms_cert, &args.kms_url).await
+    let result = if let (Some(kms_url), Some(kms_cert)) = (&args.kms_url, &args.kms_cert) {
+        create_request_from_kms_config(kms_url, kms_cert).await
     } else {
         create_request_from_encoded_config_list(&args.config)
     };
     let ohttp_request = match result {
         Ok(request) => request,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             return Err(e);
         }
     };
@@ -504,7 +464,7 @@ async fn main() -> Res<()> {
     let (enc_request, ohttp_response) = match ohttp_request.encapsulate(&request_buf) {
         Ok(result) => result,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!("{e}");
             return Err(Box::new(e));
         }
     };
@@ -517,7 +477,7 @@ async fn main() -> Res<()> {
     let response = match post_request(&args.url, &args.outer_headers, enc_request).await {
         Ok(response) => response,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             return Err(e);
         }
     };
@@ -525,7 +485,7 @@ async fn main() -> Res<()> {
 
     // decapsulate and output the http response
     if let Err(e) = handle_response(response, ohttp_response, &args.output).await {
-        error_with_backtrace!(e);
+        error!(e);
         return Err(e);
     }
 
