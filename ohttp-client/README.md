@@ -41,7 +41,14 @@ The repo supports development using GitHub Codespaces and devcontainers. The rep
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/kapilvgit/ohttp)
 
-You can build the client containers as follows. 
+Alternatively, you can setup your own environment by installing dependencies.
+```
+sudo apt update
+sudo apt install -y curl build-essential jq
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Next, you can build the client containers as follows. 
 
 ```
 docker build -f docker/Dockerfile -t attested-ohttp-client .
