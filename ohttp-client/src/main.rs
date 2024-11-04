@@ -3,7 +3,7 @@ use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};
 use ohttp::ClientRequest;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     fs::{self, File},
     io::{self, Cursor, Read, Write},
@@ -33,57 +33,6 @@ impl Deref for HexArg {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-}
-
-use backtrace::Backtrace;
-
-#[derive(Serialize)]
-struct BacktraceFrame {
-    index: usize,
-    address: String,
-    name: Option<String>,
-    file: Option<String>,
-    line: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct BacktraceJson {
-    frames: Vec<BacktraceFrame>,
-}
-
-fn capture_backtrace() -> BacktraceJson {
-    let bt = Backtrace::new();
-    let frames = bt
-        .frames()
-        .iter()
-        .enumerate()
-        .map(|(index, frame)| {
-            let symbols = frame.symbols();
-            BacktraceFrame {
-                index,
-                address: format!("{:p}", frame.ip()),
-                name: symbols
-                    .first()
-                    .and_then(backtrace::BacktraceSymbol::name)
-                    .map(|n| format!("{n:?}")),
-                file: symbols
-                    .first()
-                    .and_then(|s| s.filename())
-                    .map(|f| f.display().to_string()),
-                line: symbols.first().and_then(backtrace::BacktraceSymbol::lineno),
-            }
-        })
-        .collect();
-
-    BacktraceJson { frames }
-}
-
-macro_rules! error_with_backtrace {
-    ($e:expr) => {{
-        let backtrace = capture_backtrace();
-        let json_backtrace = serde_json::to_string_pretty(&backtrace).expect("Failed to serialize backtrace");
-        error!("An error occurred: {} Backtrace:\n{}", $e, json_backtrace);
-    }};
 }
 
 #[derive(Debug, Parser)]
@@ -393,18 +342,34 @@ async fn post_request(
         }
     }
 
-    let response = builder.body(enc_request).send().await?.error_for_status()?;
-    trace!("response status: {}\n", response.status());
-    trace!("Response headers:");
-    for (key, value) in response.headers() {
-        trace!(
-            "{}: {}",
-            key,
-            std::str::from_utf8(value.as_bytes()).unwrap()
-        );
+    match builder.body(enc_request).send().await {
+        Ok(response) => {
+            if response.status().is_success() {
+                trace!("response status: {}\n", response.status());
+                trace!("Response headers:");
+                for (key, value) in response.headers() {
+                    trace!(
+                        "{}: {}",
+                        key,
+                        std::str::from_utf8(value.as_bytes()).unwrap()
+                    );
+                }
+                Ok(response)
+            } else {
+                let error_msg = format!(
+                    "HTTP request failed with status {} and message: {}",
+                    response.status(),
+                    response.text().await?
+                );
+                error!(error_msg);
+                Err(error_msg.into())
+            }
+        }
+        Err(e) => {
+            error!("Request failed: {}", e);
+            Err(Box::new(e))
+        }
     }
-
-    Ok(response)
 }
 
 /// Decapsulate the http response
@@ -473,7 +438,7 @@ async fn main() -> Res<()> {
     ) {
         Ok(result) => result,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             return Err(e);
         }
     };
@@ -489,7 +454,7 @@ async fn main() -> Res<()> {
     let ohttp_request = match result {
         Ok(request) => request,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             return Err(e);
         }
     };
@@ -499,7 +464,7 @@ async fn main() -> Res<()> {
     let (enc_request, ohttp_response) = match ohttp_request.encapsulate(&request_buf) {
         Ok(result) => result,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!("{e}");
             return Err(Box::new(e));
         }
     };
@@ -512,7 +477,7 @@ async fn main() -> Res<()> {
     let response = match post_request(&args.url, &args.outer_headers, enc_request).await {
         Ok(response) => response,
         Err(e) => {
-            error_with_backtrace!(e);
+            error!(e);
             return Err(e);
         }
     };
@@ -520,7 +485,7 @@ async fn main() -> Res<()> {
 
     // decapsulate and output the http response
     if let Err(e) = handle_response(response, ohttp_response, &args.output).await {
-        error_with_backtrace!(e);
+        error!(e);
         return Err(e);
     }
 

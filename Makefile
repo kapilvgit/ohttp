@@ -94,30 +94,30 @@ verify-quote:
 # Local client deployments
 
 run-client:
-	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --config `curl -s http://localhost:9443/discover` 
 
 run-client-kms: service-cert 
-	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
   --target-path ${TARGET_PATH} -F "file=@${INPUT}" \
   --kms-url ${KMS} --kms-cert ./service_cert.pem 
 
 run-client-kms-aoai: service-cert 
-	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT)\
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" \
 	--kms-url ${KMS} --kms-cert ./service_cert.pem \
 	-O 'openai-internal-enableasrsupport:true' -H 'openai-internal-enableasrsupport:true'
 
 run-client-kms-aoai-token: service-cert 
-	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
+	RUST_LOG=info cargo run --bin ohttp-client -- $(SCORING_ENDPOINT) \
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" -F "language=en" \
 	--kms-url ${KMS} --kms-cert ./service_cert.pem \
 	-H 'openai-internal-enableasrsupport:true' -O 'openai-internal-enableasrsupport:true' \
 	-O 'azureml-model-deployment:$(DEPLOYMENT)' -O 'authorization: Bearer ${TOKEN}'
 
 run-client-kms-aoai-apim-token: service-cert
-	RUST_BACKTRACE=1 RUST_LOG=info cargo run --bin ohttp-client -- ${APIM_ENDPOINT} \
+	RUST_LOG=info cargo run --bin ohttp-client -- ${APIM_ENDPOINT} \
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" \
 	--kms-url ${KMS} --kms-cert ./service_cert.pem -O 'api-key: ${API_KEY}'
 

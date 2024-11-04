@@ -22,7 +22,6 @@ stream = []
 thiserror = "1"
 url = {version = "2", optional = true}
 tracing = "0.1"
-backtrace = "0.3"
 
 [dev-dependencies]
 hex = "0.4"
