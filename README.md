@@ -77,7 +77,7 @@ the server sees your IP address.
 
 The repo supports development using GitHub Codespaces and devcontainers. 
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=707634300&skip_quickstart=true&machine=premiumLinux&geo=EuropeWest)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/kapilvgit/ohttp)
 
 ## Build and Test
 

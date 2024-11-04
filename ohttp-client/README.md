@@ -10,17 +10,17 @@ Azure AI confidential inferencing.
 ## Using pre-built image
 You can use pre-built attested OHTTP container images to send an inferencing request. 
 
-Set the inferencing endpoint and accessk key as follows.
+Set the inferencing endpoint and access key as follows.
 ```
 export TARGET_URI=<URL for your endpoint>
-export KEY=<key for accessing the endpoint>
+export API_KEY=<key for accessing the endpoint>
 ```
 
 Run inferencing using a pre-packaged audio file. 
 ```
 export KMS_URL=https://accconfinferencedebug.confidential-ledger.azure.com
 docker run -e KMS_URL=${KMS_URL} mcr.microsoft.com/attested-ohttp-client:latest \
-  ${TARGET_URI} -F "file=@/examples/audio.mp3" -O "api-key: ${KEY}" -F "response_format=json"
+  ${TARGET_URI} -F "file=@/examples/audio.mp3" -O "api-key: ${API_KEY}" -F "response_format=json"
 ```
 
 Run inferencing using your own audio file by mounting the file into the container.
@@ -30,17 +30,18 @@ export INPUT_PATH=<path to your input file>
 export MOUNTED_PATH=/examples/audio.mp3
 docker run -e KMS_URL=${KMS_URL} --volume ${INPUT_PATH}:${MOUNTED_PATH} \
   mcr.microsoft.com/attested-ohttp-client:latest \
-  ${TARGET_URI} -F "file=@${MOUNTED_INPUT}" -O "api-key ${KEY}" -F "response_format=json"
+  ${TARGET_URI} -F "file=@${MOUNTED_INPUT}" -O "api-key ${API_KEY}" -F "response_format=json"
 ```
 
 ## Building your own container image
 
-You can build you own container image using code in this repository. First, clone the repository. 
-```
-git clone https://github.com/microsoft/attested-ohttp-client
-```
+### Development Environment
 
-Next, build the docker image. 
+The repo supports development using GitHub Codespaces and devcontainers. The repository includes a devcontainer configuration that installs all dependencies. 
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/kapilvgit/ohttp)
+
+You can build the client containers as follows. 
 
 ```
 docker build -f docker/Dockerfile -t attested-ohttp-client .
