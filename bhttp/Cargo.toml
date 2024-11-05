@@ -21,6 +21,7 @@ stream = []
 [dependencies]
 thiserror = "1"
 url = {version = "2", optional = true}
+tracing = "0.1"
 
 [dev-dependencies]
 hex = "0.4"

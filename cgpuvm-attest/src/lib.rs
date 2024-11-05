@@ -1,5 +1,10 @@
+pub mod err;
+
+use err::AttestError;
 use libc::{c_char, c_int, size_t, c_void};
 use std::ffi::CString;
+
+type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[link(name = "azguestattestation")]
 extern "C" {
@@ -35,23 +40,23 @@ extern "C" {
     ) -> c_int;
 }
 
-pub fn attest(data: &[u8], pcrs: u32, endpoint_url: &str) -> Result<Vec<u8>, String> {
+pub fn attest(data: &[u8], pcrs: u32, endpoint_url: &str) -> Res<Vec<u8>> {
     match CString::new(endpoint_url) {
-      Ok(endpoint_url_cstring) =>
-        unsafe {
-            let url_ptr = endpoint_url_cstring.as_ptr();
+        Ok(endpoint_url_cstring) => unsafe {
             let mut dstlen = 32 * 1024;
             let mut dst = Vec::with_capacity(dstlen);
             let pdst = dst.as_mut_ptr();
+            let url_ptr = endpoint_url_cstring.as_ptr();
 
-            if get_attestation_token(data.as_ptr(), pcrs, pdst, &mut dstlen, url_ptr) == 0 {
-              dst.set_len(dstlen);
-              Ok(dst)
+            let ret = get_attestation_token(data.as_ptr(), pcrs, pdst, &mut dstlen, url_ptr);
+            if ret == 0 {
+                dst.set_len(dstlen);
+                Ok(dst)
             } else {
-              Err("CVM guest attestation library returned a non-0 code.")?
+                Err(Box::new(AttestError::LibraryError(ret)))
             }
         },
-      _ => Err("Failed to convert endpoint URL or ephemeral key to CString.")?
+        _e => Err(Box::new(AttestError::Convertion)),
     }
 }
 
@@ -60,7 +65,7 @@ pub struct AttestationClient {
 }
 
 impl AttestationClient {
-  pub fn new() -> Result<AttestationClient,String> {
+  pub fn new() -> Res<AttestationClient> {
     let mut c = AttestationClient { st: std::ptr::null_mut() };
     unsafe {
       let rc = ga_create(&mut c.st);
@@ -69,11 +74,11 @@ impl AttestationClient {
         return Ok(c);
       }
 
-      return Err("Failed to initialize attestation library with error code {rc}".to_string());
+      return Err(Box::new(AttestError::Initialization));
     }
   }
 
-  pub fn attest(&mut self, data: &[u8], pcrs: u32, endpoint_url: &str) -> Result<Vec<u8>, String> {
+  pub fn attest(&mut self, data: &[u8], pcrs: u32, endpoint_url: &str) -> Res<Vec<u8>> {
     match CString::new(endpoint_url) {
       Ok(endpoint_url_cstring) =>
         unsafe {
@@ -87,14 +92,14 @@ impl AttestationClient {
               dst.set_len(dstlen);
               Ok(dst)
             } else {
-              Err("CVM guest attestation library returned an error: {rc}.")?
+              Err(Box::new(AttestError::LibraryError(rc)))
             }
         },
-      _ => Err("Failed to convert endpoint URL or ephemeral key to CString.")?
+      _ => Err(Box::new(AttestError::Convertion)),
     }
   }
 
-  pub fn decrypt(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+  pub fn decrypt(&mut self, data: &[u8]) -> Res<Vec<u8>> {
     unsafe {
       let mut buf = Vec::from(data);
       let mut len = data.len();
@@ -104,7 +109,7 @@ impl AttestationClient {
         buf.set_len(len);
         Ok(buf)
       } else {
-        Err("CVM guest attestation library returned an error: {rc}.")?
+        Err(Box::new(AttestError::LibraryError(rc)))
       }
     }
   }

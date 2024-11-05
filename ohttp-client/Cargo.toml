@@ -22,15 +22,20 @@ futures-util = "0.3.30"
 futures = "0.3.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.18", features = ["default", "json", "env-filter"] }
+infer = "0.16.0"
 
 [dependencies.verifier]
 path= "../verifier"
 
 [dependencies.bhttp]
-path= "../bhttp"
+git = "https://github.com/kapilvgit/ohttp.git"
+branch = "kapilv/upstream"
 features = ["bhttp", "http"]
 
 [dependencies.ohttp]
-path= "../ohttp"
+git = "https://github.com/kapilvgit/ohttp.git"
+branch = "kapilv/upstream"
 features = ["client"]
 default-features = false

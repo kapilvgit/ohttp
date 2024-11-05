@@ -8,12 +8,13 @@ gyp ninja-build pkg-config zlib1g-dev libssl-dev
 
 WORKDIR /usr/src/ohttp
 COPY . .
-RUN cargo install --path ohttp-client
+RUN cargo install --path ohttp-client --debug
 
 FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y ca-certificates openssl curl jq && rm -rf /var/lib/apt/lists/*
-COPY ./ohttp-server/ca.sh /usr/local/bin
-COPY ./examples ./examples
 COPY --from=builder /usr/local/cargo/bin/ohttp-client /usr/local/bin/ohttp-client
+COPY ./examples/audio.mp3 ./examples/audio.mp3
+COPY ./examples/15m_gpt-has-entered-the-chat.mp3 ./examples/15m_gpt-has-entered-the-chat.mp3
 COPY --chmod=755 ./docker/client/run.sh .
-CMD ["./run.sh"]
+ENV RUST_LOG=info
+ENTRYPOINT [ "./run.sh" ]

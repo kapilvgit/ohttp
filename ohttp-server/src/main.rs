@@ -247,6 +247,7 @@ async fn load_config(maa: &str, kms: &str, kid: u8) -> Res<(KeyConfig, String)> 
         Ok(cli) => cli,
         _ => Err(Box::new(ServerError::AttestationLibraryInit))?
     };
+    Ok((d, returned_kid))
 
     let t = attest_cli.attest("{}".as_bytes(), 0xff, maa)?;
     let token = String::from_utf8(t).unwrap();
@@ -570,6 +571,7 @@ async fn main() -> Res<()> {
             error!("{e}");
             e
         })?;
+        
         cache.insert(0, CachedKey::ValidKey(config, "<LOCALLY GENERATED KEY, NO ATTESTATION TOKEN>".to_owned())).await;
     }
 

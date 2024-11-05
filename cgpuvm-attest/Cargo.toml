@@ -12,3 +12,10 @@ default = []
 
 [dependencies]
 libc = "0.2.0"
+tracing = "0.1"
+thiserror = "1"
+
+[dependencies.ohttp]
+path= "../ohttp"
+features = ["server"]
+default-features = false
