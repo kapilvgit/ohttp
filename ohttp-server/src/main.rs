@@ -21,7 +21,7 @@ use warp::{hyper::Body, Filter};
 
 use tokio::time::{sleep, Duration};
 
-use cgpuvm_attest::attest;
+use cgpuvm_attest::{AttestationClient};
 use reqwest::Client;
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
@@ -34,6 +34,7 @@ use serde::Deserialize;
 
 use tracing::{error, info, trace};
 use tracing_subscriber::FmtSubscriber;
+use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
 
 #[derive(Deserialize)]
 struct ExportedKey {
@@ -88,25 +89,47 @@ impl Args {
     }
 }
 
+// We cache both successful key releases from the KMS as well as SKR errors,
+// as guest attestation is very expensive (IMDS + TPM createPrimary + RSA decrypt x2)
+// ValidKey expire based on the TTL of the cache (24 hours)
+// SKRError are manually invalidated (see import_config), after 60 seconds
+#[derive(Clone)]
+enum CachedKey {
+    ValidKey(KeyConfig, String),
+    SKRError(std::time::SystemTime)
+}
+
+// Lazily initialized shared globals
 lazy_static! {
-    static ref cache : Arc<Cache<i32, (KeyConfig, String)>> = Arc::new(Cache::builder()
+    // Key cache for Oblivious HTTP, by key id
+    static ref cache : Arc<Cache<i32, CachedKey>> = Arc::new(Cache::builder()
         .time_to_live(Duration::from_secs(24 * 60 * 60))
         .build());
 }
 
 async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String)> {
     // Check if the key configuration is in cache
-    if let Some((config,token)) = cache.get(&kid).await {
-        info!("Found OHTTP configuration for KID {kid} in cache.");
-        return Ok((config,token));
+    if let Some(entry) = cache.get(&kid).await {
+        match entry {
+            CachedKey::ValidKey(config, token) => {
+            info!("Found OHTTP configuration for KID {kid} in cache.");
+            return Ok((config,token));
+          },
+          CachedKey::SKRError(ts) => {
+            if ts.elapsed()? > Duration::from_secs(60) {
+                cache.invalidate(&kid).await;
+            } else {
+                Err(format!("SKR for KID {kid} has failed in the past 60 seconds, waiting to retry."))?
+            }
+          }
+        }
     }
 
-    // Get MAA token from CVM guest attestation library
-    let token = attest("{}".as_bytes(), 0xffff, maa)?;
+    let mut attest_cli = AttestationClient::new().expect("Failed to create attestation client object");
+    let t = attest_cli.attest("{}".as_bytes(), 0xff, maa)?;
 
-    let token = String::from_utf8(token).unwrap();
-    info!("Fetched MAA token");
-    trace!("{token}");
+    let token = String::from_utf8(t).unwrap();
+    info!("Fetched MAA token: {token}");
 
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
@@ -119,11 +142,10 @@ async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String
 
     loop {
         // kid<0 will get the latest, this is used by the discover endpoint
-        let url = if kid>=0 { format!("{kms}?kid={kid}") }else{ kms.to_owned() };
+        let url = if kid>=0 { format!("{kms}?encrypted=true&kid={kid}") }else{ format!("{kms}?encrypted=true") };
         info!("Sending SKR request to {url}");
 
         // Get HPKE private key from Azure KMS
-        // FIXME(adl) kid should be an input of the SKR request
         let response = client
             .post(url)
             .header("Authorization", format!("Bearer {token}"))
@@ -167,8 +189,11 @@ async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String
         }
     }
 
-    let cwk = hex::decode(&key)?;
-    let cwk_map: Value = serde_cbor::from_slice(&cwk)?;
+    // The KMS returns the base64-encoded, RSA2048-OAEP-SHA256 encrypted CBOR key
+    let enc_key = b64.decode(&key)?;
+    let decrypted_key = attest_cli.decrypt(enc_key.as_slice())?;
+    let cwk_map: Value = serde_cbor::from_slice(&decrypted_key)?;
+
     let mut d = None;
     let mut returned_kid : u8 = 0;
 
@@ -235,7 +260,7 @@ async fn import_config(maa: &str, kms: &str, kid: i32) -> Res<(KeyConfig, String
         ],
     )?;
 
-    cache.insert(kid, (config.clone(), token.clone())).await;
+    cache.insert(kid, CachedKey::ValidKey(config.clone(), token.clone())).await;
     Ok((config, token))
 }
 
@@ -349,14 +374,19 @@ async fn score(
                     Ok(ohttp) => Some((ohttp,token)),
                     _ => None
                 },
-                _ => { info!("Failed to load KID {kid} from KMS"); None }
+                Err(e) => {
+                    info!("Failed to load KID {kid} from KMS: {e}");
+                    None
+                }
             }
         };
 
     match ohttp {
-      None => Ok(warp::http::Response::builder()
-                .status(500)
-                .body(Body::from(&b"Failed to get or load the OHTTP coniguration from local cache or key management service."[..]))),
+      None => {
+        cache.insert(kid, CachedKey::SKRError(std::time::SystemTime::now())).await;
+        Ok(warp::http::Response::builder().status(500)
+            .body(Body::from(&b"Failed to get or load the OHTTP coniguration from local cache or key management service."[..])))
+      },
 
       Some((ohttp,token)) => {
         let inject_headers = compute_injected_headers(&headers, inject_request_headers);
@@ -472,7 +502,7 @@ async fn main() -> Res<()> {
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::Aes128Gcm),
                 SymmetricSuite::new(Kdf::HkdfSha256, Aead::ChaCha20Poly1305),
             ])?;
-        cache.insert(0, (config, "".to_owned())).await;
+        cache.insert(0, CachedKey::ValidKey(config, "<LOCALLY GENERATED KEY, NO ATTESTATION TOKEN>".to_owned())).await;
     }
 
     // Build a simple subscriber that outputs to stdout
