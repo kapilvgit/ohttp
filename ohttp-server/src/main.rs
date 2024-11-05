@@ -113,11 +113,11 @@ lazy_static! {
         .build());
 }
 
-fn parse_cbor_key(key: &str, kid: u8) -> Res<(Option<Vec<u8>>, u8)> {
-    let cwk = hex::decode(key)?;
-    let cwk_map: Value = serde_cbor::from_slice(&cwk)?;
+fn parse_cbor_key(key: &[u8], kid: u8) -> Res<(Option<Vec<u8>>, u8)> {
+    let cwk_map: Value = serde_cbor::from_slice(&key)?;
     let mut d = None;
     let mut returned_kid: u8 = 0;
+
     if let Value::Map(map) = cwk_map {
         for (key, value) in map {
             if let Value::Integer(key) = key {
@@ -247,7 +247,6 @@ async fn load_config(maa: &str, kms: &str, kid: u8) -> Res<(KeyConfig, String)> 
         Ok(cli) => cli,
         _ => Err(Box::new(ServerError::AttestationLibraryInit))?
     };
-    Ok((d, returned_kid))
 
     let t = attest_cli.attest("{}".as_bytes(), 0xff, maa)?;
     let token = String::from_utf8(t).unwrap();
@@ -376,6 +375,18 @@ fn compute_injected_headers(headers: &HeaderMap, keys: Vec<String>) -> HeaderMap
     result
 }
 
+// Serialize Box<dyn StdError> as it lacks `Send` trait
+async fn load_config_safe(maa: &str, kms: &str, kid: u8) -> Result<(KeyConfig, String), String> {
+    match load_config(maa, kms, kid).await {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            let err = format!("Error loading OHTTP key configuration {kid}: {e:?}");
+            error!("{err}");
+            Err(err)
+        }
+    }
+}
+
 #[instrument(skip(headers, body, args), fields(version = %VERSION))]
 async fn score(
     headers: warp::hyper::HeaderMap,
@@ -400,29 +411,30 @@ async fn score(
         }
         Some(kid) => kid,
     };
+
     let maa_url = args.maa_url.clone().unwrap_or(DEFAULT_MAA_URL.to_string());
     let kms_url = args.kms_url.clone().unwrap_or(DEFAULT_KMS_URL.to_string());
 
-    let (ohttp, token) = match load_config(&maa_url, &kms_url, kid).await {
-        Err(e) => {
-            let error_msg = format!("Failed to get or load OHTTP configuration: {e}");
-            error!(error_msg);
+    let (config, token) = match load_config_safe(&maa_url, &kms_url, kid).await {
+        Ok((config, token)) => (config, token),
+        Err(_e) => {
             cache.insert(kid, CachedKey::SKRError(std::time::SystemTime::now())).await;
-
+            let error_msg = "Failed to load the requested OHTTP key identifier.";
             return Ok(warp::http::Response::builder()
                 .status(500)
                 .body(Body::from(error_msg.as_bytes())));
         }
-        Ok((config, token)) => match OhttpServer::new(config) {
-            Ok(server) => (server, token),
-            Err(e) => {
-                let error_msg = "Failed to create OHTTP server from config.";
-                error!("{error_msg} {e}");
-                return Ok(warp::http::Response::builder()
-                    .status(500)
-                    .body(Body::from(error_msg.as_bytes())));
-            }
-        },
+    };
+
+    let ohttp =  match OhttpServer::new(config) {
+        Ok(server) => server,
+        Err(e) => {
+            let error_msg = "Failed to create OHTTP server from config.";
+            error!("{error_msg} {e}");
+            return Ok(warp::http::Response::builder()
+                .status(500)
+                .body(Body::from(error_msg.as_bytes())));
+        }
     };
 
     let inject_request_headers = args.inject_request_headers.clone();
@@ -571,7 +583,7 @@ async fn main() -> Res<()> {
             error!("{e}");
             e
         })?;
-        
+
         cache.insert(0, CachedKey::ValidKey(config, "<LOCALLY GENERATED KEY, NO ATTESTATION TOKEN>".to_owned())).await;
     }
 
