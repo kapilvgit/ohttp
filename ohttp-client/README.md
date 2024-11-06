@@ -44,7 +44,7 @@ The repo supports development using GitHub Codespaces and devcontainers. The rep
 Alternatively, you can setup your own environment by installing dependencies.
 ```
 sudo apt update
-sudo apt install -y curl build-essential jq
+sudo apt install -y curl build-essential jq libssl-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
