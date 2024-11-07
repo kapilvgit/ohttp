@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 #![deny(clippy::pedantic)]
 
 pub mod err;

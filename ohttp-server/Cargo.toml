@@ -1,7 +1,7 @@
 [package]
 name = "ohttp-server"
-version = "0.5.3"
-authors = ["Martin Thomson <mt@lowentropy.net>"]
+version = "0.1.0"
+authors = ["Kapil Vaswani <kapilv@microsoft.com>"]
 edition = "2021"
 
 [features]
@@ -32,15 +32,18 @@ tracing-subscriber = { version = "0.3.18", features = ["default", "json", "env-f
 thiserror = "1"
 uuid = { version = "1.0", features = ["v4"] }
 
-[dependencies.bhttp]
-path= "../bhttp"
-features = ["bhttp", "write-http"]
-
-[dependencies.ohttp]
-path= "../ohttp"
-features = ["server"]
-default-features = false
-
 [dependencies.cgpuvm-attest]
 path= "../cgpuvm-attest"
 features = []
+
+[dependencies.bhttp]
+git = "https://github.com/microsoft/ohttp.git"
+branch = "main"
+features = ["bhttp", "write-http"]
+
+[dependencies.ohttp]
+git = "https://github.com/microsoft/ohttp.git"
+branch = "main"
+features = ["server"]
+default-features = false
+
