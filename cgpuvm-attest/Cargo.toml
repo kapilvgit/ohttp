@@ -16,6 +16,7 @@ tracing = "0.1"
 thiserror = "1"
 
 [dependencies.ohttp]
-path= "../ohttp"
+git = "https://github.com/microsoft/ohttp.git"
+branch = "main"
 features = ["server"]
 default-features = false
