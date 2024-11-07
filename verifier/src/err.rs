@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use base64::DecodeError;
 use hex::FromHexError;
 use thiserror::Error;
