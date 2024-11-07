@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use bhttp::{Message, Mode};
 use clap::Parser;
 use futures_util::{stream::unfold, StreamExt};

@@ -1,7 +1,7 @@
 [package]
 name = "ohttp-client"
-version = "0.5.3"
-authors = ["Martin Thomson <mt@lowentropy.net>"]
+version = "0.1.0"
+authors = ["Antoine Delignat-Lavaud <antdl@microsoft.com>, Arthi Gokarn <arthig@microsoft.com>, Kapil Vaswani <kapilv@microsoft.com>, Tien Le <tienle@microsoft.com>"]
 edition = "2021"
 
 [features]
@@ -30,12 +30,12 @@ infer = "0.16.0"
 path= "../verifier"
 
 [dependencies.bhttp]
-git = "https://github.com/kapilvgit/ohttp.git"
-branch = "kapilv/upstream"
+git = "https://github.com/microsoft/ohttp.git"
+branch = "main"
 features = ["bhttp", "http"]
 
 [dependencies.ohttp]
-git = "https://github.com/kapilvgit/ohttp.git"
-branch = "kapilv/upstream"
+git = "https://github.com/microsoft/ohttp.git"
+branch = "main"
 features = ["client"]
 default-features = false

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use base64::{self, engine::general_purpose, Engine};
 use openssl::{
     ecdsa::EcdsaSig,
