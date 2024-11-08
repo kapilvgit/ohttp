@@ -1,5 +1,5 @@
 KMS ?= https://accconfinferencedebug.confidential-ledger.azure.com
-MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
+MAA ?= https://confinfermaaeus2test.eus2.test.attest.azure.net
 
 # MODEL can be whisper_opensource, whisper_aoai or whisper_aoai_local
 MODEL ?= whisper_opensource
