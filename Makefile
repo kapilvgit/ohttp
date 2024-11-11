@@ -16,6 +16,9 @@ else ifeq ($(MODEL), whisper_aoai)
 	TARGET_PATH ?= '/v1/engines/whisper/audio/translations'
 	DEPLOYMENT ?= 'arthig-deploy20'
 	SCORING_ENDPOINT ?= 'https://arthig-ep.eastus2.inference.ml.azure.com/score'
+	APIM_ENDPOINT ?= ''
+	API_KEY ?= ''
+
 else
 	echo "Unknown model"
 endif
@@ -118,6 +121,11 @@ run-client-kms-aoai-token: service-cert
 
 run-client-kms-aoai-apim-token: service-cert
 	RUST_LOG=info cargo run --bin ohttp-client -- ${APIM_ENDPOINT} \
+	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" \
+	--kms-url ${KMS} --kms-cert ./service_cert.pem -O 'api-key: ${API_KEY}'
+
+run-client-kms-aoai-apim-token-test: service-cert
+	RUST_LOG=info RUST_BACKTRACE=1 ./target/debug/ohttp-client ${APIM_ENDPOINT} \
 	--target-path ${TARGET_PATH} -F "file=@${INPUT}" -F "response_format=json" \
 	--kms-url ${KMS} --kms-cert ./service_cert.pem -O 'api-key: ${API_KEY}'
 
