@@ -243,7 +243,11 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
 
     loop {
         // Make the GET request
-        let response = client.get(url.clone()).send().await?.error_for_status()?;
+        let response = client
+            .get(url.clone())
+            .send()
+            .await?
+            .error_for_status()?;
 
         // We may have to wait for receipt to be ready
         match response.status().as_u16() {
@@ -259,12 +263,12 @@ async fn get_kms_config(kms_url: String, cert: &str) -> Res<String> {
                 } else {
                     Err("Max retries reached, giving up. Cannot reach key management service")?;
                 }
-            }
+            },
             200 => {
                 let body = response.text().await?;
                 assert!(!body.is_empty());
-                return Ok(body);
-            }
+                return Ok(body)
+            },
             e => {
                 Err(format!("KMS returned unexpected {} status code.", e))?;
             }

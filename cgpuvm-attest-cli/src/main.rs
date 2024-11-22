@@ -12,5 +12,6 @@ pub fn main() {
     let Ok(token) = attest(s.as_bytes(), 0xffff, maa_url) else {
         panic!("Failed to get MAA token")
     };
+    
     println!("Got MAA token: {}", String::from_utf8(token).unwrap());
 }
