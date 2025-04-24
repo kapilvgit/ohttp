@@ -1,5 +1,5 @@
 KMS ?= https://acceu-aml-504.confidential-ledger.azure.com
-MAA ?= https://maanosecureboottestyfu.eus.attest.azure.net
+MAA ?= https://confinfermaaeus2test.eus2.test.attest.azure.net
 TARGET ?= http://127.0.0.1:3000
 # TARGET_PATH ?= '/v1/audio/transcriptions'
 TARGET_PATH ?= '/whisper'
